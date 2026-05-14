@@ -205,13 +205,22 @@ function extractDeviceName(text) {
   return "";
 }
 
+function ambiguousTokenMatchesDevice(token, deviceName) {
+  if (!token || !deviceName) return false;
+  if (token === "xbox") return deviceName.startsWith("Xbox");
+  if (token === "playstation") return deviceName.startsWith("PS");
+  if (token === "switch") return deviceName.startsWith("Nintendo Switch");
+  if (token === "quest") return deviceName.startsWith("Meta Quest");
+  return false;
+}
+
 function detectAmbiguousDevice(text) {
   const value = String(text || "").toLowerCase();
   if (extractDeviceName(text)) return "";
   if (/\bxbox\b/.test(value) || /เอ็กซ์บ็อกซ์|เอ็กบ็อก/.test(value)) return "xbox";
   if (/\bps\b|\bplaystation\b|เพลย์/.test(value) && !/ps[345]|ps\s*portal|ps\s*vr|psvr/.test(value)) return "playstation";
-  if (/\bswitch\b|นินเทนโด|นินเทน/.test(value) && !/switch\s*[12]|ns[12]\b/.test(value)) return "switch";
-  if (/\bquest\b/.test(value) && !/quest\s*3s?|mq3/.test(value)) return "quest";
+  if (/\bswitch\b|\bnintendo\b|นินเทนโด|นินเทน|สวิตช์/.test(value) && !/switch\s*[12]|ns[12]\b/.test(value)) return "switch";
+  if (/\bquest\b|\bmeta\b/.test(value) && !/quest\s*3s?|mq3/.test(value)) return "quest";
   return "";
 }
 
@@ -1994,10 +2003,12 @@ app.get("/admin/take-action", async (req, res) => {
 
     return res.type("html").send(`
       <html>
-        <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.5;">
+        <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;max-width:600px;">
           <h1>Admin Take Action</h1>
+          <p><a href="/admin/resume?token=${encodeURIComponent(adminToken)}">▶️ ดู/ปลด pause ทั้งหมด</a></p>
           <p>เลือกลูกค้าที่ต้องการให้ AI หยุดตอบทันที</p>
-          <ul>${rows || "<li>No recent sessions yet</li>"}</ul>
+          <ul style="list-style:none;padding:0;">${rows || "<li>No recent sessions yet</li>"}</ul>
         </body>
       </html>
     `);
@@ -2006,11 +2017,14 @@ app.get("/admin/take-action", async (req, res) => {
   const pause = await pauseSession({ sessionKey, customerId: sessionKey, minutes, reason });
   res.type("html").send(`
     <html>
-      <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.5;">
-        <h1>Paused</h1>
-        <p>AI paused for <code>${pause.sessionKey}</code></p>
+      <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+      <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;">
+        <h1>✅ Paused</h1>
+        <p>AI หยุดตอบ <code>${pause.sessionKey}</code></p>
         <p>Reason: ${pause.reason}</p>
         <p>Until: ${pause.expiresAt || "manual resume required"}</p>
+        <p><a href="/admin/take-action?token=${encodeURIComponent(adminToken)}">← กลับหน้า list</a></p>
+        <p><a href="/admin/resume?token=${encodeURIComponent(adminToken)}&sessionKey=${encodeURIComponent(pause.sessionKey)}" style="display:inline-block;padding:10px 16px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume ตอนนี้</a></p>
       </body>
     </html>
   `);
@@ -2087,6 +2101,53 @@ app.post("/admin/resume", (req, res) => {
 
   pausedSessions.delete(sessionKey);
   res.json({ ok: true, sessionKey, resumed: true });
+});
+
+app.get("/admin/resume", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const sessionKey = String(req.query.sessionKey || "").trim();
+  const now = Date.now();
+  const meta = { viewport: '<meta name="viewport" content="width=device-width, initial-scale=1">' };
+
+  if (!sessionKey) {
+    const pauses = [...pausedSessions.entries()]
+      .map(([key, pause]) => ({
+        sessionKey: key,
+        reason: pause.reason || "",
+        expiresAt: pause.expiresAt ? new Date(pause.expiresAt).toISOString() : null,
+        remainingMinutes: pause.expiresAt ? Math.max(0, Math.round((pause.expiresAt - now) / 60000)) : null,
+      }))
+      .sort((a, b) => (a.expiresAt || "").localeCompare(b.expiresAt || ""));
+
+    const rows = pauses
+      .map((p) => {
+        const url = `/admin/resume?token=${encodeURIComponent(adminToken)}&sessionKey=${encodeURIComponent(p.sessionKey)}`;
+        return `<li style="margin:12px 0;padding:12px;border:1px solid #ccc;border-radius:8px;">
+          <div><code style="word-break:break-all;">${p.sessionKey}</code></div>
+          <div style="color:#666;font-size:13px;">${p.reason} · เหลือ ${p.remainingMinutes ?? "?"} นาที</div>
+          <a href="${url}" style="display:inline-block;margin-top:8px;padding:10px 16px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume / ปลด Pause</a>
+        </li>`;
+      })
+      .join("");
+
+    return res.type("html").send(`<html><head>${meta.viewport}</head>
+      <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;max-width:600px;">
+        <h1>Admin Resume</h1>
+        <p><a href="/admin/take-action?token=${encodeURIComponent(adminToken)}">← กลับไปหน้า Take Action</a></p>
+        <ul style="list-style:none;padding:0;">${rows || "<li>ไม่มีลูกค้าที่ pause อยู่</li>"}</ul>
+      </body></html>`);
+  }
+
+  const existed = pausedSessions.has(sessionKey);
+  pausedSessions.delete(sessionKey);
+  res.type("html").send(`<html><head>${meta.viewport}</head>
+    <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;">
+      <h1>${existed ? "✅ Resumed" : "ℹ️ ไม่พบ pause"}</h1>
+      <p><code>${sessionKey}</code></p>
+      <p>${existed ? "AI กลับมาตอบลูกค้าคนนี้แล้ว" : "ลูกค้านี้ไม่ได้ถูก pause อยู่"}</p>
+      <p><a href="/admin/resume?token=${encodeURIComponent(adminToken)}">← ดูรายการ pause ทั้งหมด</a></p>
+    </body></html>`);
 });
 
 app.post("/dialogflow-webhook", async (req, res) => {
@@ -2221,9 +2282,17 @@ app.post("/dialogflow-webhook", async (req, res) => {
     }
 
     const ambiguousToken = detectAmbiguousDevice(customerText);
+    const ambiguousConflictsWithMemory =
+      ambiguousToken && memory.lastDevice && !ambiguousTokenMatchesDevice(ambiguousToken, memory.lastDevice);
+    if (ambiguousConflictsWithMemory) {
+      memory.lastDevice = "";
+      memory.lastRentalDays = null;
+      memory.lastStartDate = "";
+      memory.lastReturnDate = "";
+    }
     if (
       ambiguousToken &&
-      !memory.lastDevice &&
+      (ambiguousConflictsWithMemory || !memory.lastDevice) &&
       (includesPriceQuestion(customerText, memory) ||
         includesLongTermRentalQuestion(customerText) ||
         /เช่า|rent/i.test(customerText))
