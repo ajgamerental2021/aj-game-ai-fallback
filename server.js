@@ -48,6 +48,7 @@ let pauseSheetCache = {
 const conversationMemory = new Map();
 const pausedSessions = new Map();
 const recentSessions = new Map();
+let globalPause = null;
 
 const deviceRates = new Map([
   ["PS4", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
@@ -1529,6 +1530,14 @@ function shouldUseLastGameQuery(customerText, memory) {
 }
 
 function getActivePause(sessionKey) {
+  if (globalPause) {
+    if (globalPause.expiresAt && globalPause.expiresAt <= Date.now()) {
+      globalPause = null;
+    } else {
+      return { ...globalPause, scope: "global" };
+    }
+  }
+
   const pause = pausedSessions.get(sessionKey);
   if (!pause) return null;
 
@@ -2019,12 +2028,23 @@ app.get("/admin/take-action", async (req, res) => {
       })
       .join("");
 
+    const globalBanner = globalPause
+      ? `<div style="padding:12px;background:#fee;border:2px solid #c33;border-radius:8px;margin-bottom:16px;">
+          <strong>🌐 Global Pause กำลังเปิด</strong><br/>
+          AI หยุดตอบทุกคน · ${globalPause.reason}<br/>
+          <a href="/admin/resume-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;margin-top:8px;padding:8px 14px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume All</a>
+        </div>`
+      : `<div style="padding:12px;background:#efe;border:1px solid #0a7;border-radius:8px;margin-bottom:16px;">
+          ✅ AI ตอบปกติ
+          <br/><a href="/admin/pause-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;margin-top:8px;padding:8px 14px;background:#c33;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">⏸ Pause All / หยุดทุกคน</a>
+        </div>`;
     return res.type("html").send(`
       <html>
         <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
         <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;max-width:600px;">
           <h1>Admin Take Action</h1>
-          <p><a href="/admin/resume?token=${encodeURIComponent(adminToken)}">▶️ ดู/ปลด pause ทั้งหมด</a></p>
+          ${globalBanner}
+          <p><a href="/admin/resume?token=${encodeURIComponent(adminToken)}">▶️ ดู/ปลด pause รายคน</a></p>
           <p>เลือกลูกค้าที่ต้องการให้ AI หยุดตอบทันที</p>
           <ul style="list-style:none;padding:0;">${rows || "<li>No recent sessions yet</li>"}</ul>
         </body>
@@ -2046,6 +2066,54 @@ app.get("/admin/take-action", async (req, res) => {
       </body>
     </html>
   `);
+});
+
+app.get("/admin/pause-all", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const minutes = Number(req.query.minutes || defaultPauseMinutes);
+  const reason = String(req.query.reason || "global_admin_pause");
+  globalPause = {
+    expiresAt: minutes > 0 ? Date.now() + minutes * 60 * 1000 : 0,
+    reason,
+  };
+  await persistPauseToWebhook({
+    sessionKey: "*GLOBAL*",
+    customerId: "*GLOBAL*",
+    minutes,
+    reason,
+    status: "paused",
+  });
+  const meta = '<meta name="viewport" content="width=device-width, initial-scale=1">';
+  const until = globalPause.expiresAt ? new Date(globalPause.expiresAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) : "ไม่จำกัด (manual)";
+  res.type("html").send(`<html><head>${meta}</head>
+    <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;max-width:600px;">
+      <h1>🌐 Global Pause ON</h1>
+      <p>AI หยุดตอบ <strong>ทุกคน</strong> รวมถึงลูกค้าใหม่ที่จะทักเข้ามา</p>
+      <p>📅 จนถึง: ${until}</p>
+      <p>📝 Reason: ${reason}</p>
+      <p><a href="/admin/resume-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;padding:12px 20px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume All / เปิด AI กลับ</a></p>
+      <p><a href="/admin/take-action?token=${encodeURIComponent(adminToken)}">← Take Action</a> · <a href="/admin/resume?token=${encodeURIComponent(adminToken)}">Resume List</a></p>
+    </body></html>`);
+});
+
+app.get("/admin/resume-all", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const was = Boolean(globalPause);
+  globalPause = null;
+  await persistPauseToWebhook({
+    sessionKey: "*GLOBAL*",
+    customerId: "*GLOBAL*",
+    minutes: 0,
+    reason: "global_admin_resumed",
+    status: "resumed",
+  });
+  const meta = '<meta name="viewport" content="width=device-width, initial-scale=1">';
+  res.type("html").send(`<html><head>${meta}</head>
+    <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;max-width:600px;">
+      <h1>${was ? "✅ Global Pause OFF" : "ℹ️ ไม่ได้ pause ทั้งหมดอยู่"}</h1>
+      <p>AI กลับมาตอบลูกค้าตามปกติ (ยกเว้นรายคนที่ pause อยู่)</p>
+      <p><a href="/admin/take-action?token=${encodeURIComponent(adminToken)}">← Take Action</a> · <a href="/admin/resume?token=${encodeURIComponent(adminToken)}">Resume List</a></p>
+    </body></html>`);
 });
 
 app.post("/admin/pause", (req, res) => {
@@ -2180,9 +2248,19 @@ app.get("/admin/resume", async (req, res) => {
       })
       .join("");
 
+    const globalBanner = globalPause
+      ? `<div style="padding:12px;background:#fee;border:2px solid #c33;border-radius:8px;margin-bottom:16px;">
+          <strong>🌐 Global Pause กำลังเปิด</strong> · ${globalPause.reason}<br/>
+          <a href="/admin/resume-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;margin-top:8px;padding:8px 14px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume All</a>
+        </div>`
+      : `<div style="padding:12px;background:#efe;border:1px solid #0a7;border-radius:8px;margin-bottom:16px;">
+          ✅ AI ตอบปกติ ·
+          <a href="/admin/pause-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;margin-left:6px;padding:6px 12px;background:#c33;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">⏸ Pause All</a>
+        </div>`;
     return res.type("html").send(`<html><head>${meta.viewport}</head>
       <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;max-width:600px;">
         <h1>Admin Resume</h1>
+        ${globalBanner}
         <p><a href="/admin/take-action?token=${encodeURIComponent(adminToken)}">← กลับไปหน้า Take Action</a></p>
         <ul style="list-style:none;padding:0;">${rows || "<li>ไม่มีลูกค้าที่ pause อยู่</li>"}</ul>
       </body></html>`);
