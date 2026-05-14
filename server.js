@@ -181,6 +181,7 @@ function getMemory(sessionKey) {
     conversationMemory.set(sessionKey, {
       greetedDate: "",
       lastDevice: "",
+      lastGameQuery: "",
       lastMessages: [],
     });
   }
@@ -649,7 +650,21 @@ async function lookupGameSummary(customerText, { force = false } = {}) {
     "เกม",
     "game",
     "ไหม",
+    "ไหมครับ",
+    "ไหมค่ะ",
+    "ไหมคะ",
     "มั้ย",
+    "มั้ยครับ",
+    "มั้ยค่ะ",
+    "มั้ยคะ",
+    "ครับ",
+    "ค่ะ",
+    "คะ",
+    "จ้า",
+    "จ๊ะ",
+    "หน่อย",
+    "หน่อยครับ",
+    "หน่อยค่ะ",
     "เล่น",
     "ได้",
     "ใน",
@@ -679,7 +694,7 @@ async function lookupGameSummary(customerText, { force = false } = {}) {
 
   const queryParts = query.split(" ").filter((part) => part.length >= 3);
   const compactQuery = compactSearchText(query);
-  const matches = [];
+  const rawMatches = [];
 
   for (const game of gameData.games || []) {
     const gameName = normalizeSearchText(game.name);
@@ -692,29 +707,47 @@ async function lookupGameSummary(customerText, { force = false } = {}) {
       queryParts.length > 0 && queryParts.every((part) => gameName.includes(part));
 
     if (directMatch || compactMatch || tokenMatch) {
-      matches.push({
+      rawMatches.push({
         name: game.name,
         platform: getPlatformName(gameData, game.platformId),
         unavailable: Boolean(game.unavailable),
         availableDate: game.available_date || "",
       });
     }
-
-    if (matches.length >= 8) break;
   }
 
-  if (matches.length === 0) {
+  if (rawMatches.length === 0) {
     return [
       "ข้อมูลเกม: ไม่พบชื่อเกมที่ตรงกับคำถามใน Gist",
       "ให้ตอบว่าเบื้องต้นยังไม่เจอในรายการรวม และให้ลูกค้าเช็ค/เลือกเกมเองได้ที่ https://ajgamerental2021.github.io/ajconsole/game_index.html",
     ].join("\n");
   }
 
-  const lines = matches.map((match) => {
+  const exactMatches = rawMatches.filter((match) => {
+    const compactName = compactSearchText(match.name);
+    return compactName === compactQuery || compactName.includes(compactQuery);
+  });
+  const matches = (exactMatches.length ? exactMatches : rawMatches).slice(0, 12);
+  const grouped = new Map();
+
+  for (const match of matches) {
+    const key = compactSearchText(match.name);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        name: match.name,
+        platforms: [],
+      });
+    }
+
+    const group = grouped.get(key);
     const status = match.unavailable
       ? `ไม่พร้อมให้เลือกตอนนี้${match.availableDate ? `, คาดว่าจะว่าง ${match.availableDate}` : ""}`
       : "มีให้เลือก";
-    return `- ${match.name}: ${match.platform} (${status})`;
+    group.platforms.push(`${match.platform} (${status})`);
+  }
+
+  const lines = [...grouped.values()].map((group) => {
+    return `- ${group.name}: ${group.platforms.join(" / ")}`;
   });
 
   return [
@@ -812,6 +845,25 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
       ]
         .filter(Boolean)
         .join("\n");
+}
+
+function extractGameQueryFromSummary(gameSummary) {
+  const line = String(gameSummary || "")
+    .split("\n")
+    .find((item) => item.startsWith("- "));
+  if (!line) return "";
+  return line.replace(/^- /, "").split(":")[0].trim();
+}
+
+function shouldUseLastGameQuery(customerText, memory) {
+  if (!memory.lastGameQuery) return false;
+
+  const value = normalizeSearchText(customerText);
+  const hasDevice = Boolean(extractDeviceName(customerText));
+  const asksPlatformFollowup =
+    /บน|เครื่อง|ใน|ps5|ps4|switch|xbox|meta|quest|playstation|nintendo|platform/.test(value);
+
+  return hasDevice || asksPlatformFollowup;
 }
 
 function getActivePause(sessionKey) {
@@ -1295,9 +1347,18 @@ app.post("/dialogflow-webhook", async (req, res) => {
       return res.json(dialogflowText(deterministicAnswer));
     }
 
-    const gameSummary = await lookupGameSummary(customerText);
+    const gameLookupText = shouldUseLastGameQuery(customerText, memory)
+      ? memory.lastGameQuery
+      : customerText;
+    const gameSummary = await lookupGameSummary(gameLookupText, {
+      force: shouldUseLastGameQuery(customerText, memory),
+    });
     const gameAnswer = buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday);
     if (gameAnswer) {
+      const extractedGame = extractGameQueryFromSummary(gameSummary);
+      if (extractedGame) {
+        memory.lastGameQuery = extractedGame;
+      }
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, gameAnswer);
       return res.json(dialogflowText(gameAnswer));
@@ -1312,6 +1373,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       `todayWeekday=${today.weekday}`,
       `shouldGreetToday=${shouldGreetToday}`,
       `lastDevice=${memory.lastDevice || "none"}`,
+      `lastGameQuery=${memory.lastGameQuery || "none"}`,
       `recentMessages=${JSON.stringify(memory.lastMessages)}`,
     ].join("\n");
 
