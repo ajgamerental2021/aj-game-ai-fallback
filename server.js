@@ -231,17 +231,35 @@ function buildAmbiguousDeviceAnswer(token, english, shouldGreetToday) {
   if (token === "xbox") {
     lines.push(english ? "🎮 Xbox Series X or Series S?" : "🎮 สนใจ Xbox Series X หรือ Series S ครับ?");
     lines.push("");
-    lines.push(english ? "⚡️ Series X: 350 THB/day · 1,800/week · 5,000/month" : "⚡️ Series X: 350 บาท/วัน · 1,800/สัปดาห์ · 5,000/เดือน");
-    lines.push(english ? "🟢 Series S: 300 THB/day · 1,500/week · 4,000/month" : "🟢 Series S: 300 บาท/วัน · 1,500/สัปดาห์ · 4,000/เดือน");
+    lines.push(english ? "⚡️ Series X" : "⚡️ Series X");
+    lines.push(english ? "💰 350 THB/day" : "💰 รายวัน 350 บาท");
+    lines.push(english ? "🗓️ 1,800 THB/week" : "🗓️ รายสัปดาห์ 1,800 บาท");
+    lines.push(english ? "🔒 Deposit 2,000 THB" : "🔒 ค่าประกัน 2,000 บาท");
     lines.push("");
-    lines.push(english ? "🙏 Tell me the model and number of days, I'll quote the total." : "🙏 แจ้งรุ่นและจำนวนวันได้เลยครับ จะคำนวณยอดให้ทันที");
+    lines.push(english ? "🟢 Series S" : "🟢 Series S");
+    lines.push(english ? "💰 300 THB/day" : "💰 รายวัน 300 บาท");
+    lines.push(english ? "🗓️ 1,500 THB/week" : "🗓️ รายสัปดาห์ 1,500 บาท");
+    lines.push(english ? "🔒 Deposit 2,000 THB" : "🔒 ค่าประกัน 2,000 บาท");
+    lines.push("");
+    lines.push(english ? "🙏 Tell me the model and how many days, I'll quote the total." : "🙏 แจ้งรุ่นและจำนวนวันได้เลยครับ จะคำนวณยอดให้ทันที");
   } else if (token === "playstation") {
     lines.push(english ? "🎮 Which PlayStation?" : "🎮 สนใจ PS รุ่นไหนครับ?");
-    lines.push(english ? "🔹 PS4 / PS5 / PS5 Pro / PS Portal / PS VR2" : "🔹 PS4 / PS5 / PS5 Pro / PS Portal / PS VR2");
+    lines.push("");
+    lines.push("🔹 PS4");
+    lines.push("🔹 PS5");
+    lines.push("🔹 PS5 Pro");
+    lines.push("🔹 PS Portal");
+    lines.push("🔹 PS VR2");
+    lines.push("");
+    lines.push(english ? "🙏 Tell me the model and how many days." : "🙏 แจ้งรุ่นและจำนวนวันได้เลยครับ");
   } else if (token === "switch") {
     lines.push(english ? "🎮 Nintendo Switch 1 or Switch 2?" : "🎮 Nintendo Switch 1 หรือ Switch 2 ครับ?");
+    lines.push("");
+    lines.push(english ? "🙏 Tell me the model and how many days." : "🙏 แจ้งรุ่นและจำนวนวันได้เลยครับ");
   } else if (token === "quest") {
     lines.push(english ? "🥽 Meta Quest 3 or Quest 3s?" : "🥽 Meta Quest 3 หรือ Quest 3s ครับ?");
+    lines.push("");
+    lines.push(english ? "🙏 Tell me the model and how many days." : "🙏 แจ้งรุ่นและจำนวนวันได้เลยครับ");
   }
   return lines.filter(Boolean).join("\n");
 }
@@ -1650,7 +1668,7 @@ async function getEffectivePause(sessionKey, customerId = "") {
   }
 }
 
-async function persistPauseToWebhook({ sessionKey, customerId, minutes, reason }) {
+async function persistPauseToWebhook({ sessionKey, customerId, minutes, reason, status = "paused" }) {
   if (!pauseWebhookUrl) return;
 
   try {
@@ -1664,7 +1682,7 @@ async function persistPauseToWebhook({ sessionKey, customerId, minutes, reason }
         customerId,
         minutes,
         reason,
-        status: "paused",
+        status,
         pausedUntil: expiresAt,
         createdAt: new Date().toISOString(),
       }),
@@ -2090,7 +2108,7 @@ app.post("/admin/admin-reply", (req, res) => {
     });
 });
 
-app.post("/admin/resume", (req, res) => {
+app.post("/admin/resume", async (req, res) => {
   if (!requireAdmin(req, res)) return;
 
   const sessionKey = String(req.body?.sessionKey || req.query.sessionKey || "").trim();
@@ -2100,10 +2118,18 @@ app.post("/admin/resume", (req, res) => {
   }
 
   pausedSessions.delete(sessionKey);
+  await persistPauseToWebhook({
+    sessionKey,
+    customerId: sessionKey,
+    minutes: 0,
+    reason: "admin_resumed",
+    status: "resumed",
+  });
+  pauseSheetCache = { expiresAt: 0, rows: [] };
   res.json({ ok: true, sessionKey, resumed: true });
 });
 
-app.get("/admin/resume", (req, res) => {
+app.get("/admin/resume", async (req, res) => {
   if (!requireAdmin(req, res)) return;
 
   const sessionKey = String(req.query.sessionKey || "").trim();
@@ -2111,21 +2137,44 @@ app.get("/admin/resume", (req, res) => {
   const meta = { viewport: '<meta name="viewport" content="width=device-width, initial-scale=1">' };
 
   if (!sessionKey) {
-    const pauses = [...pausedSessions.entries()]
-      .map(([key, pause]) => ({
+    const merged = new Map();
+    for (const [key, pause] of pausedSessions.entries()) {
+      merged.set(key, {
         sessionKey: key,
         reason: pause.reason || "",
         expiresAt: pause.expiresAt ? new Date(pause.expiresAt).toISOString() : null,
         remainingMinutes: pause.expiresAt ? Math.max(0, Math.round((pause.expiresAt - now) / 60000)) : null,
-      }))
-      .sort((a, b) => (a.expiresAt || "").localeCompare(b.expiresAt || ""));
+        source: "memory",
+      });
+    }
+    try {
+      const rows = await loadPauseSheetRows();
+      for (const row of rows) {
+        const key = String(row.SessionKey || row.sessionKey || row.session || "").trim();
+        if (!key || merged.has(key)) continue;
+        const status = String(row.Status || row.status || "").trim().toLowerCase();
+        if (status && !["paused", "pause", "active", "true", "yes"].includes(status)) continue;
+        const until = parseDateTime(row.PausedUntil || row.pausedUntil || row.ExpiresAt || row.expiresAt);
+        if (until && until <= now) continue;
+        merged.set(key, {
+          sessionKey: key,
+          reason: String(row.Reason || row.reason || "pause_sheet"),
+          expiresAt: until ? new Date(until).toISOString() : null,
+          remainingMinutes: until ? Math.max(0, Math.round((until - now) / 60000)) : null,
+          source: "sheet",
+        });
+      }
+    } catch (error) {
+      console.error("Resume page: pause sheet load failed:", error);
+    }
+    const pauses = [...merged.values()].sort((a, b) => (a.expiresAt || "").localeCompare(b.expiresAt || ""));
 
     const rows = pauses
       .map((p) => {
         const url = `/admin/resume?token=${encodeURIComponent(adminToken)}&sessionKey=${encodeURIComponent(p.sessionKey)}`;
         return `<li style="margin:12px 0;padding:12px;border:1px solid #ccc;border-radius:8px;">
           <div><code style="word-break:break-all;">${p.sessionKey}</code></div>
-          <div style="color:#666;font-size:13px;">${p.reason} · เหลือ ${p.remainingMinutes ?? "?"} นาที</div>
+          <div style="color:#666;font-size:13px;">${p.reason} · เหลือ ${p.remainingMinutes ?? "?"} นาที · ${p.source}</div>
           <a href="${url}" style="display:inline-block;margin-top:8px;padding:10px 16px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume / ปลด Pause</a>
         </li>`;
       })
@@ -2141,6 +2190,14 @@ app.get("/admin/resume", (req, res) => {
 
   const existed = pausedSessions.has(sessionKey);
   pausedSessions.delete(sessionKey);
+  await persistPauseToWebhook({
+    sessionKey,
+    customerId: sessionKey,
+    minutes: 0,
+    reason: "admin_resumed",
+    status: "resumed",
+  });
+  pauseSheetCache = { expiresAt: 0, rows: [] };
   res.type("html").send(`<html><head>${meta.viewport}</head>
     <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;">
       <h1>${existed ? "✅ Resumed" : "ℹ️ ไม่พบ pause"}</h1>
