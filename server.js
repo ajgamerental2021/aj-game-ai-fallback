@@ -247,9 +247,11 @@ function getBangkokDateObject() {
 function extractRentalDays(text) {
   const value = String(text || "").toLowerCase();
   const patterns = [
-    /(\d+)\s*(?:วัน|day|days|d)\b/i,
+    /(\d+)\s*วัน/i,
+    /(\d+)\s*(?:day|days|d)\b/i,
     /(?:เช่า|rent)\s*(\d+)\b/i,
-    /(\d+)\s*(?:คืน|night|nights)\b/i,
+    /(\d+)\s*คืน/i,
+    /(\d+)\s*(?:night|nights)\b/i,
   ];
 
   for (const pattern of patterns) {
@@ -294,7 +296,7 @@ function includesPriceQuestion(text) {
   const value = normalizeSearchText(text);
   const hasDevice = Boolean(extractDeviceName(text));
   return (
-    /ราคา|กี่บาท|เท่าไหร่|ค่าเช่า|เรท|price|how much|rate|cost|rental fee/.test(value) ||
+    /ราคา|กี่บาท|เท่าไหร่|ค่าเช่า|เรท|สรุป|ยอด|รวม|price|how much|rate|cost|rental fee|summary|total/.test(value) ||
     (hasDevice && /เช่า|rent|rental/.test(value))
   );
 }
@@ -321,6 +323,90 @@ function calculateRental(deviceName, days, noContract = false, returningCustomer
     bookingFee: 200,
     payOnDelivery: discountedRentalFee + deposit - 200,
   };
+}
+
+function includesSummaryRequest(text) {
+  const value = normalizeSearchText(text);
+  return /สรุป|ยอด|รวม|จอง|โอน|บัญชี|เลขบัญชี|ชำระ|payment|pay|summary|total|bank|transfer|book|booking/.test(
+    value,
+  ) || /summarize|summarise/.test(value);
+}
+
+function includesNoContractRequest(text) {
+  return /ไม่ทำสัญญา|ไม่แนบบัตร|ไม่สะดวกทำสัญญา|ไม่ส่งบัตร|no contract|without contract|no id|without id/i.test(
+    String(text || ""),
+  );
+}
+
+function buildThaiPaymentLines(calc, noContract) {
+  if (noContract) {
+    return [
+      "",
+      "📝 กรณีไม่ทำสัญญาการเช่า",
+      `🔒 ค่าประกันปรับเป็น: ${formatMoney(calc.deposit)}`,
+      "",
+      "🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท",
+      "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง",
+    ];
+  }
+
+  return [
+    "",
+    "🏦 ข้อมูลโอนจอง",
+    "✅ เลขบัญชี: 8690576029",
+    "✅ ธนาคาร: กรุงไทย",
+    "✅ ชื่อบัญชี: สมชาย เหมศิริ",
+    "",
+    "📝 ลิงก์ทำสัญญาการเช่า",
+    "https://forms.gle/Y6xfFaMyuJ9REhtz9",
+    "",
+    `❌ ไม่ทำสัญญา → ค่าประกัน ${formatMoney(calc.rate.deposit === 4000 ? 8000 : 5000)}`,
+    "🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท",
+    "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง",
+  ];
+}
+
+function buildEnglishPaymentLines(calc, noContract) {
+  if (noContract) {
+    return [
+      "",
+      "📝 No rental agreement option",
+      `🔒 Adjusted deposit: ${formatMoney(calc.deposit, true)}`,
+      "",
+      "🚫 Customer cancellation → 200 THB booking payment is non-refundable",
+      "🚫 Early return → unused rental difference is non-refundable",
+    ];
+  }
+
+  return [
+    "",
+    "💳 Payment options for foreign customers",
+    "Please let us know which payment method you prefer:",
+    "",
+    "1️⃣ Cash (THB)",
+    `Pay the full amount on delivery: ${formatMoney(calc.total, true)}`,
+    "No bank details needed.",
+    "",
+    "2️⃣ Wise",
+    `Pay the full amount before delivery: ${formatMoney(calc.total, true)}`,
+    "Bank details below.",
+    "",
+    "3️⃣ Thai Bank Transfer",
+    "Advance booking payment: 200 THB",
+    `Remaining payment on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
+    "",
+    "🏦 Bank details",
+    "✅ Bank Acc No.: 8690576029",
+    "✅ Bank Name: Krung Thai",
+    "✅ Bank Acc Name: Somchai Hemsiri",
+    "",
+    "📝 Rental agreement link",
+    "https://forms.gle/92PBGXEHMQhtPov48",
+    "",
+    `❌ No rental agreement → deposit ${formatMoney(calc.rate.deposit === 4000 ? 8000 : 5000, true)}`,
+    "🚫 Customer cancellation → 200 THB booking payment is non-refundable",
+    "🚫 Early return → unused rental difference is non-refundable",
+  ];
 }
 
 function buildPriceAnswer(customerText, memory, shouldGreetToday) {
@@ -352,10 +438,11 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   memory.lastDevice = deviceName;
 
   const days = extractRentalDays(customerText);
-  const noContract = /ไม่ทำสัญญา|ไม่แนบบัตร|no contract|without contract/i.test(customerText);
+  const noContract = includesNoContractRequest(customerText);
   const returningCustomer = /ลูกค้าเก่า|เคยเช่า|returning|old customer/i.test(customerText);
   const calc = days ? calculateRental(deviceName, days, noContract, returningCustomer) : null;
   const rate = deviceRates.get(deviceName);
+  const summaryRequest = includesSummaryRequest(customerText);
 
   if (!days) {
     return english
@@ -442,6 +529,8 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
         "",
         monthly ? "Short-term rentals are usually daily or weekly, but monthly rental is available at this rate." : "",
         "",
+        ...(summaryRequest ? buildEnglishPaymentLines(calc, noContract) : []),
+        summaryRequest ? "" : "",
         "Please send the start date and Google Maps link so we can check delivery fee.",
       ]
         .filter(Boolean)
@@ -462,6 +551,8 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
         "",
         monthly ? "ปกติทางร้านให้เช่าแบบระยะสั้นเป็นรายวันและรายสัปดาห์ แต่มีเรทรายเดือนให้ตามนี้ครับ" : "",
         "",
+        ...(summaryRequest ? buildThaiPaymentLines(calc, noContract) : []),
+        summaryRequest ? "" : "",
         "ถ้าสนใจจอง แจ้งวันเริ่มเช่าและส่งลิงก์ Google Maps ได้เลยครับ 📍",
       ]
         .filter(Boolean)
