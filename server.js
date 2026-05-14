@@ -49,6 +49,7 @@ const conversationMemory = new Map();
 const pausedSessions = new Map();
 const recentSessions = new Map();
 let globalPause = null;
+const globalPauseExceptions = new Set();
 
 const deviceRates = new Map([
   ["PS4", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
@@ -126,23 +127,12 @@ function clipForChat(text) {
 function beautifyReply(text) {
   const value = String(text || "").trim();
   if (!value) return value;
-
-  const lines = value.split(/\r?\n/).map((line) => line.trimEnd());
-  const spaced = [];
-
-  for (const line of lines) {
-    const isVisualLine = /^[🎮📅🗓️📆💰🔒✅📝🚚⭐⚠️📍🗨️👋✨🏦💳💵💸👉❌🚫🔥🎁😊]/u.test(line);
-    const isLinkLine = /^https?:\/\//i.test(line) || /^👉\s*https?:\/\//i.test(line);
-    const previous = spaced[spaced.length - 1];
-
-    if ((isVisualLine || isLinkLine) && previous && previous !== "") {
-      spaced.push("");
-    }
-
-    spaced.push(line);
-  }
-
-  return spaced.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function getBangkokDateParts() {
@@ -375,6 +365,7 @@ function extractStartDate(text) {
 function includesPriceQuestion(text, memory = {}) {
   if (includesAccountRentalQuestion(text)) return false;
   if (includesIncludedGamesQuestion(text)) return false;
+  if (includesAvailabilityQuestion(text)) return false;
   const value = normalizeSearchText(text);
   const hasDevice = Boolean(extractDeviceName(text) || memory.lastDevice);
   const monthly = /เดือน|รายเดือน|month|monthly/.test(value);
@@ -398,6 +389,50 @@ function includesLongTermRentalQuestion(text) {
 function includesPromotionQuestion(text) {
   const value = normalizeSearchText(text);
   return /โปร|โปรโมชั่น|ส่วนลด|ลดราคา|promotion|promo|discount|deal/.test(value);
+}
+
+function includesAvailabilityQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /เครื่องว่าง|มีเครื่อง|เครื่องพร้อม|ของว่าง|เครื่องเหลือ|in stock|available now|do you have (a |the )?(ps|xbox|switch|quest|console)/.test(
+    value,
+  );
+}
+
+async function buildAvailabilityAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesAvailabilityQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  const deviceName = extractDeviceName(customerText) || memory.lastDevice;
+  let summary = "";
+  try {
+    summary = await loadInventorySummary();
+  } catch (error) {
+    console.error("Availability inventory load failed:", error);
+  }
+  const lines = [];
+  if (shouldGreetToday) lines.push(english ? "Hello 🎮✨" : "สวัสดีครับ 🎮✨");
+  if (!deviceName) {
+    lines.push(english ? "📦 Which model do you want to check?" : "📦 อยากเช็คเครื่องรุ่นไหนครับ?");
+    lines.push(english ? "Tell me the model, e.g. PS5, PS5 Pro, Switch 2." : "แจ้งชื่อเครื่อง เช่น PS5, PS5 Pro, Switch 2 ได้เลยครับ");
+    return lines.filter(Boolean).join("\n");
+  }
+  const lineForDevice = summary.split("\n").find((l) => l.toLowerCase().includes(deviceName.toLowerCase()));
+  if (!lineForDevice) {
+    lines.push(english ? `📦 Let me check ${deviceName} queue for you.` : `📦 เดี๋ยวเช็คคิว ${deviceName} ให้ครับ`);
+    lines.push(english ? "🙏 Admin will confirm shortly." : "🙏 สักครู่แอดมินยืนยันให้นะครับ");
+    return lines.filter(Boolean).join("\n");
+  }
+  const isAvailable = /available/i.test(lineForDevice) && !/not available/i.test(lineForDevice);
+  if (isAvailable) {
+    lines.push(english ? `✅ ${deviceName} is available right now 🎮` : `✅ ${deviceName} ว่างอยู่ครับ พร้อมส่ง 🎮`);
+    lines.push(english ? "📅 Tell me start date and how many days, I'll quote total." : "📅 แจ้งวันเริ่มเช่าและจำนวนวันได้เลยครับ จะคำนวณยอดให้ทันที");
+  } else {
+    const dateMatch = lineForDevice.match(/วันที่คาดว่าจะว่าง:\s*([^)]+)/);
+    const nextDate = dateMatch ? dateMatch[1].trim() : "";
+    lines.push(english ? `⚠️ ${deviceName} is fully booked right now` : `⚠️ ${deviceName} คิวเต็มอยู่ครับ`);
+    if (nextDate) lines.push(english ? `📅 Next available: ${nextDate}` : `📅 คาดว่าว่างวันที่: ${nextDate}`);
+    lines.push(english ? "🙏 Admin will confirm exact queue, please wait a moment." : "🙏 เดี๋ยวแอดมินยืนยันคิวอีกครั้งครับ");
+  }
+  return lines.filter(Boolean).join("\n");
 }
 
 function includesOutOfAreaQuestion(text) {
@@ -692,72 +727,43 @@ function includesNoContractRequest(text) {
 function buildThaiPaymentLines(calc, noContract) {
   if (noContract) {
     return [
-      "",
-      "📝 กรณีไม่ทำสัญญาการเช่า",
-      `🔒 ค่าประกันปรับเป็น: ${formatMoney(calc.deposit)}`,
-      "",
-      "🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท",
-      "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง",
-    ];
+      ["📝 กรณีไม่ทำสัญญาการเช่า", `🔒 ค่าประกันปรับเป็น: ${formatMoney(calc.deposit)}`].join("\n"),
+      ["🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท", "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง"].join("\n"),
+    ].join("\n\n");
   }
 
   return [
-    "",
-    "🏦 ข้อมูลโอนจอง",
-    "✅ เลขบัญชี: 8690576029",
-    "✅ ธนาคาร: กรุงไทย",
-    "✅ ชื่อบัญชี: สมชาย เหมศิริ",
-    "",
-    "📝 ลิงก์ทำสัญญาการเช่า",
-    "https://forms.gle/Y6xfFaMyuJ9REhtz9",
-    "",
-    `❌ ไม่ทำสัญญา → ค่าประกัน ${formatMoney(calc.rate.deposit === 4000 ? 8000 : 5000)}`,
-    "🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท",
-    "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง",
-  ];
+    ["🏦 ข้อมูลโอนจอง", "✅ เลขบัญชี: 8690576029", "✅ ธนาคาร: กรุงไทย", "✅ ชื่อบัญชี: สมชาย เหมศิริ"].join("\n"),
+    ["📝 ลิงก์ทำสัญญาการเช่า", "https://forms.gle/Y6xfFaMyuJ9REhtz9"].join("\n"),
+    [
+      `❌ ไม่ทำสัญญา → ค่าประกัน ${formatMoney(calc.rate.deposit === 4000 ? 8000 : 5000)}`,
+      "🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท",
+      "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง",
+    ].join("\n"),
+  ].join("\n\n");
 }
 
 function buildEnglishPaymentLines(calc, noContract) {
   if (noContract) {
     return [
-      "",
-      "📝 No rental agreement option",
-      `🔒 Adjusted deposit: ${formatMoney(calc.deposit, true)}`,
-      "",
-      "🚫 Customer cancellation → 200 THB booking payment is non-refundable",
-      "🚫 Early return → unused rental difference is non-refundable",
-    ];
+      ["📝 No rental agreement option", `🔒 Adjusted deposit: ${formatMoney(calc.deposit, true)}`].join("\n"),
+      ["🚫 Customer cancellation → 200 THB booking payment is non-refundable", "🚫 Early return → unused rental difference is non-refundable"].join("\n"),
+    ].join("\n\n");
   }
 
   return [
-    "",
     "💳 Payment options for foreign customers",
-    "Please let us know which payment method you prefer:",
-    "",
-    "1️⃣ Cash (THB)",
-    `Pay the full amount on delivery: ${formatMoney(calc.total, true)}`,
-    "No bank details needed.",
-    "",
-    "2️⃣ Wise",
-    `Pay the full amount before delivery: ${formatMoney(calc.total, true)}`,
-    "Bank details below.",
-    "",
-    "3️⃣ Thai Bank Transfer",
-    "Advance booking payment: 200 THB",
-    `Remaining payment on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
-    "",
-    "🏦 Bank details",
-    "✅ Bank Acc No.: 8690576029",
-    "✅ Bank Name: Krung Thai",
-    "✅ Bank Acc Name: Somchai Hemsiri",
-    "",
-    "📝 Rental agreement link",
-    "https://forms.gle/92PBGXEHMQhtPov48",
-    "",
-    `❌ No rental agreement → deposit ${formatMoney(calc.rate.deposit === 4000 ? 8000 : 5000, true)}`,
-    "🚫 Customer cancellation → 200 THB booking payment is non-refundable",
-    "🚫 Early return → unused rental difference is non-refundable",
-  ];
+    ["1️⃣ Cash (THB)", `Pay full on delivery: ${formatMoney(calc.total, true)}`].join("\n"),
+    ["2️⃣ Wise", `Pay full before delivery: ${formatMoney(calc.total, true)}`].join("\n"),
+    ["3️⃣ Thai Bank Transfer", "Booking: 200 THB", `On delivery: ${formatMoney(calc.payOnDelivery, true)}`].join("\n"),
+    ["🏦 Bank details", "✅ Bank Acc No.: 8690576029", "✅ Bank Name: Krung Thai", "✅ Bank Acc Name: Somchai Hemsiri"].join("\n"),
+    ["📝 Rental agreement link", "https://forms.gle/92PBGXEHMQhtPov48"].join("\n"),
+    [
+      `❌ No rental agreement → deposit ${formatMoney(calc.rate.deposit === 4000 ? 8000 : 5000, true)}`,
+      "🚫 Customer cancellation → 200 THB booking payment is non-refundable",
+      "🚫 Early return → unused rental difference is non-refundable",
+    ].join("\n"),
+  ].join("\n\n");
 }
 
 function buildPriceAnswer(customerText, memory, shouldGreetToday) {
@@ -866,51 +872,51 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
     memory.lastStartDate = startDate.toISOString();
   }
 
-  return english
-    ? [
-        shouldGreetToday ? "Hello 🎮✨" : "",
-        monthly ? `${deviceName} monthly rental` : `${deviceName} for ${days} days`,
-        "",
-        `💰 Rental fee: ${formatMoney(calc.rentalFee, true)}`,
-        calc.discount ? `⭐ Returning customer discount 10%: -${formatMoney(calc.discount, true)}` : "",
-        `🔒 Deposit: ${formatMoney(calc.deposit, true)} (refundable on return day)`,
-        "",
-        `✅ Total before delivery: ${formatMoney(calc.total, true)}`,
-        "",
-        "📝 Booking payment: 200 THB",
-        `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
-        returnDate
-          ? `📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`
-          : "",
-        "",
-        monthly ? "Short-term rentals are usually daily or weekly, but monthly rental is available at this rate." : "",
-        "",
-        ...(includePayment ? buildEnglishPaymentLines(calc, noContract) : []),
-        startDate ? "" : "Please send the start date and Google Maps link so we can check delivery fee.",
-      ]
-        .filter(Boolean)
-        .join("\n")
-    : [
-        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
-        monthly ? `${deviceName} เช่าแบบรายเดือนครับ` : `${deviceName} เช่า ${days} วันครับ`,
-        "",
-        `💰 ค่าเช่า: ${formatMoney(calc.rentalFee)}`,
-        calc.discount ? `⭐ ส่วนลดลูกค้าเก่า 10%: -${formatMoney(calc.discount)}` : "",
-        `🔒 ค่าประกัน: ${formatMoney(calc.deposit)} ได้คืนวันคืนเครื่อง`,
-        "",
-        `✅ รวมสุทธิ: ${formatMoney(calc.total)}`,
-        "",
-        "📝 โอนจองคิว: 200 บาท",
-        `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`,
-        returnDate ? `📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}` : "",
-        "",
-        monthly ? "ปกติทางร้านให้เช่าแบบระยะสั้นเป็นรายวันและรายสัปดาห์ แต่มีเรทรายเดือนให้ตามนี้ครับ" : "",
-        "",
-        ...(includePayment ? buildThaiPaymentLines(calc, noContract) : []),
-        startDate ? "" : "ถ้าสนใจจอง แจ้งวันเริ่มเช่าและส่งลิงก์ Google Maps ได้เลยครับ 📍",
-      ]
-        .filter(Boolean)
-        .join("\n");
+  const keep = (arr) => arr.filter((x) => x !== undefined && x !== null && x !== false).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+
+  if (english) {
+    const groups = [];
+    if (shouldGreetToday) groups.push("Hello 🎮✨");
+    const summary = [
+      `📌 ${monthly ? `${deviceName} monthly rental` : `${deviceName} for ${days} days`}`,
+      `💰 Rental fee: ${formatMoney(calc.rentalFee, true)}`,
+      calc.discount ? `⭐ Returning discount 10%: -${formatMoney(calc.discount, true)}` : false,
+      `🔒 Deposit: ${formatMoney(calc.deposit, true)} (refundable on return day)`,
+      `✅ Total: ${formatMoney(calc.total, true)}`,
+    ];
+    groups.push(keep(summary));
+    const pay = [
+      "📝 Booking payment: 200 THB",
+      `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
+    ];
+    groups.push(keep(pay));
+    if (returnDate) groups.push(`📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`);
+    if (monthly) groups.push("ℹ️ Short-term rentals are usually daily/weekly, monthly available at this rate.");
+    if (includePayment) groups.push(buildEnglishPaymentLines(calc, noContract));
+    if (!startDate) groups.push("📍 Please send start date and Google Maps link for delivery fee.");
+    return groups.filter(Boolean).join("\n\n");
+  }
+
+  const groups = [];
+  if (shouldGreetToday) groups.push("สวัสดีครับ 🎮✨");
+  const summary = [
+    `📌 ${monthly ? `${deviceName} เช่าแบบรายเดือน` : `${deviceName} เช่า ${days} วัน`}`,
+    `💰 ค่าเช่า: ${formatMoney(calc.rentalFee)}`,
+    calc.discount ? `⭐ ส่วนลดลูกค้าเก่า 10%: -${formatMoney(calc.discount)}` : false,
+    `🔒 ค่าประกัน: ${formatMoney(calc.deposit)} ได้คืนวันคืนเครื่อง`,
+    `✅ รวมสุทธิ: ${formatMoney(calc.total)}`,
+  ];
+  groups.push(keep(summary));
+  const pay = [
+    "📝 โอนจองคิว: 200 บาท",
+    `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`,
+  ];
+  groups.push(keep(pay));
+  if (returnDate) groups.push(`📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}`);
+  if (monthly) groups.push("ℹ️ ปกติเช่าระยะสั้นรายวัน/รายสัปดาห์ แต่มีเรทรายเดือนตามนี้ครับ");
+  if (includePayment) groups.push(buildThaiPaymentLines(calc, noContract));
+  if (!startDate) groups.push("📍 ถ้าสนใจจอง แจ้งวันเริ่มเช่าและส่งลิงก์ Google Maps ได้เลยครับ");
+  return groups.filter(Boolean).join("\n\n");
 }
 
 function buildLongTermRentalAnswer(customerText, memory, shouldGreetToday) {
@@ -1276,20 +1282,19 @@ function includesGameQuestion(text) {
     includesPromotionQuestion(text) ||
     includesAccountRentalQuestion(text) ||
     includesGameplayHowToQuestion(text) ||
-    includesIncludedGamesQuestion(text)
+    includesIncludedGamesQuestion(text) ||
+    includesAvailabilityQuestion(text)
   ) {
     return false;
   }
 
-  if (/เกม|game/.test(normalized) && /มี|ไหม|มั้ย|have|available|เช่า|rent/.test(normalized)) {
-    return true;
-  }
-
   const candidate = buildGameSearchQuery(text);
+  const hasEnglishToken = /[a-z0-9]{3,}/i.test(candidate);
+  const hasGameKeyword = /เกม|game/.test(normalized);
   const hasAvailabilityPhrase = /มี|ไหม|มั้ย|have|available/.test(normalized);
-  const hasLikelyGameToken = /[a-z0-9]{3,}/i.test(candidate) || /[\u0E00-\u0E7F]{4,}/.test(candidate);
 
-  return hasAvailabilityPhrase && hasLikelyGameToken && !extractDeviceName(text);
+  if (!hasEnglishToken) return false;
+  return hasAvailabilityPhrase || hasGameKeyword;
 }
 
 function buildGameSearchQuery(text) {
@@ -1646,7 +1651,8 @@ function getActivePause(sessionKey) {
   if (globalPause) {
     if (globalPause.expiresAt && globalPause.expiresAt <= Date.now()) {
       globalPause = null;
-    } else {
+      globalPauseExceptions.clear();
+    } else if (!globalPauseExceptions.has(sessionKey)) {
       return { ...globalPause, scope: "global" };
     }
   }
@@ -2182,17 +2188,20 @@ app.get("/admin/take-action", async (req, res) => {
         const url = `/admin/take-action?token=${encodeURIComponent(adminToken)}&sessionKey=${encodeURIComponent(
           item.sessionKey,
         )}&minutes=${encodeURIComponent(minutes)}&reason=${encodeURIComponent(reason)}`;
-        return [
-          "<li>",
-          `<a href="${url}" style="font-weight:700;">Take action / Pause</a>`,
-          " ",
-          `<strong>${item.updatedAt}</strong>`,
-          " ",
-          `<code>${item.sessionKey}</code>`,
-          " ",
-          `<span>${String(item.lastText || "").replace(/[<>&]/g, "")}</span>`,
-          "</li>",
-        ].join("");
+        const exemptUrl = `/admin/exempt?token=${encodeURIComponent(adminToken)}&sessionKey=${encodeURIComponent(item.sessionKey)}`;
+        const isExempt = globalPauseExceptions.has(item.sessionKey);
+        const exemptBtn = globalPause
+          ? (isExempt
+              ? `<a href="/admin/unexempt?token=${encodeURIComponent(adminToken)}&sessionKey=${encodeURIComponent(item.sessionKey)}" style="display:inline-block;margin-left:6px;padding:6px 10px;background:#999;color:#fff;text-decoration:none;border-radius:6px;font-size:12px;">🔒 ถอน Exempt</a>`
+              : `<a href="${exemptUrl}" style="display:inline-block;margin-left:6px;padding:6px 10px;background:#06c;color:#fff;text-decoration:none;border-radius:6px;font-size:12px;">▶️ ให้ AI ตอบเฉพาะคนนี้</a>`)
+          : "";
+        return `<li style="margin:10px 0;padding:10px;border:1px solid #ccc;border-radius:8px;">
+          <div style="font-size:12px;color:#666;">${item.updatedAt}</div>
+          <div><code style="word-break:break-all;font-size:12px;">${item.sessionKey}</code></div>
+          <div style="margin:6px 0;">${String(item.lastText || "").replace(/[<>&]/g, "")}</div>
+          <a href="${url}" style="display:inline-block;padding:6px 10px;background:#c33;color:#fff;text-decoration:none;border-radius:6px;font-size:12px;font-weight:700;">⏸ Pause</a>
+          ${exemptBtn}
+        </li>`;
       })
       .join("");
 
@@ -2261,6 +2270,37 @@ app.get("/admin/pause-all", async (req, res) => {
       <p>📝 Reason: ${reason}</p>
       <p><a href="/admin/resume-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;padding:12px 20px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume All / เปิด AI กลับ</a></p>
       <p><a href="/admin/take-action?token=${encodeURIComponent(adminToken)}">← Take Action</a> · <a href="/admin/resume?token=${encodeURIComponent(adminToken)}">Resume List</a></p>
+    </body></html>`);
+});
+
+app.get("/admin/exempt", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const sessionKey = String(req.query.sessionKey || "").trim();
+  const meta = '<meta name="viewport" content="width=device-width, initial-scale=1">';
+  if (!sessionKey) {
+    return res.status(400).type("html").send(`<html><head>${meta}</head><body style="font-family:-apple-system,sans-serif;padding:16px;"><h1>Missing sessionKey</h1></body></html>`);
+  }
+  globalPauseExceptions.add(sessionKey);
+  pausedSessions.delete(sessionKey);
+  res.type("html").send(`<html><head>${meta}</head>
+    <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;">
+      <h1>✅ AI ตอบเฉพาะคนนี้</h1>
+      <p><code>${sessionKey}</code></p>
+      <p>ลูกค้านี้จะได้รับการตอบจาก AI แม้ว่า Global Pause จะเปิดอยู่</p>
+      <p><a href="/admin/take-action?token=${encodeURIComponent(adminToken)}">← Take Action</a> · <a href="/admin/resume?token=${encodeURIComponent(adminToken)}">Resume List</a></p>
+    </body></html>`);
+});
+
+app.get("/admin/unexempt", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const sessionKey = String(req.query.sessionKey || "").trim();
+  globalPauseExceptions.delete(sessionKey);
+  const meta = '<meta name="viewport" content="width=device-width, initial-scale=1">';
+  res.type("html").send(`<html><head>${meta}</head>
+    <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;">
+      <h1>✅ ถอน exemption</h1>
+      <p><code>${sessionKey}</code> กลับมาอยู่ใน Global Pause</p>
+      <p><a href="/admin/resume?token=${encodeURIComponent(adminToken)}">← Resume List</a></p>
     </body></html>`);
 });
 
@@ -2575,6 +2615,15 @@ app.post("/dialogflow-webhook", async (req, res) => {
       return res.json(dialogflowText(answer));
     }
 
+    const availabilityAnswer = await buildAvailabilityAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (availabilityAnswer) {
+      answerBlocks.push(availabilityAnswer);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer);
+      return res.json(dialogflowText(answer));
+    }
+
     const outOfAreaAnswer = buildOutOfAreaAnswer(customerText, shouldGreetForNextBlock());
     if (outOfAreaAnswer) {
       answerBlocks.push(outOfAreaAnswer);
@@ -2687,13 +2736,33 @@ app.post("/dialogflow-webhook", async (req, res) => {
           const gameSummary = await lookupGameSummary(gameLookupText, {
             force: useLastGameQuery,
           });
-          const gameAnswer = buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetForNextBlock());
-          if (gameAnswer) {
-            const extractedGame = extractGameQueryFromSummary(gameSummary);
-            if (extractedGame) {
-              memory.lastGameQuery = extractedGame;
+          const notFound = gameSummary.includes("ไม่พบชื่อเกม");
+          if (notFound) {
+            const english = isEnglishText(customerText);
+            const handoff = english
+              ? "🙏 One moment, admin will check this for you shortly 😊"
+              : "🙏 สักครู่จะมีแอดมินเข้ามาช่วยเช็คให้นะครับ 😊";
+            answerBlocks.push(handoff);
+            const minutes = 120;
+            pausedSessions.set(sessionKey, {
+              expiresAt: Date.now() + minutes * 60 * 1000,
+              reason: "game_not_found_handoff",
+            });
+            await persistPauseToWebhook({
+              sessionKey,
+              customerId: sessionKey,
+              minutes,
+              reason: "game_not_found_handoff",
+            });
+          } else {
+            const gameAnswer = buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetForNextBlock());
+            if (gameAnswer) {
+              const extractedGame = extractGameQueryFromSummary(gameSummary);
+              if (extractedGame) {
+                memory.lastGameQuery = extractedGame;
+              }
+              answerBlocks.push(gameAnswer);
             }
-            answerBlocks.push(gameAnswer);
           }
         } catch (error) {
           console.error("Game lookup failed:", error);
