@@ -48,22 +48,22 @@ const conversationMemory = new Map();
 const pausedSessions = new Map();
 
 const deviceRates = new Map([
-  ["PS4", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
-  ["PS Portal", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
-  ["PS VR2", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
-  ["Nintendo Switch 1", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
-  ["Xbox Series S", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
-  ["Meta Quest 3s", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
-  ["Logitech G29", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
-  ["Xbox Series X", { daily: 350, weekly: 1800, deposit: 2000, category: "350" }],
-  ["PS5", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
-  ["Nintendo Switch 2", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
-  ["ROG XBOX Ally X", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
-  ["Meta Quest 3", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
-  ["Steam Deck OLED", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
-  ["Viture Beast", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
-  ["PS5 Pro", { daily: 500, weekly: 3000, deposit: 4000, category: "500" }],
-  ["Lenovo Legion GO2", { daily: 500, weekly: 3000, deposit: 4000, category: "500" }],
+  ["PS4", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
+  ["PS Portal", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
+  ["PS VR2", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
+  ["Nintendo Switch 1", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
+  ["Xbox Series S", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
+  ["Meta Quest 3s", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
+  ["Logitech G29", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
+  ["Xbox Series X", { daily: 350, weekly: 1800, monthly: 5000, deposit: 2000, category: "350" }],
+  ["PS5", { daily: 400, weekly: 2500, monthly: 6500, deposit: 2000, category: "400" }],
+  ["Nintendo Switch 2", { daily: 400, weekly: 2500, monthly: 6500, deposit: 2000, category: "400" }],
+  ["ROG XBOX Ally X", { daily: 400, weekly: 2500, monthly: 6500, deposit: 2000, category: "400" }],
+  ["Meta Quest 3", { daily: 400, weekly: 2500, monthly: 6500, deposit: 2000, category: "400" }],
+  ["Steam Deck OLED", { daily: 400, weekly: 2500, monthly: 6500, deposit: 2000, category: "400" }],
+  ["Viture Beast", { daily: 400, weekly: 2500, monthly: 6500, deposit: 2000, category: "400" }],
+  ["PS5 Pro", { daily: 500, weekly: 3000, monthly: 8000, deposit: 4000, category: "500" }],
+  ["Lenovo Legion GO2", { daily: 500, weekly: 3000, monthly: 8000, deposit: 4000, category: "500" }],
 ]);
 
 const deviceAliases = [
@@ -133,12 +133,13 @@ function beautifyReply(text) {
 
     if (isVisualLine && previous && previous !== "") {
       spaced.push("");
+      spaced.push("");
     }
 
     spaced.push(line);
   }
 
-  return spaced.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return spaced.join("\n").replace(/\n{4,}/g, "\n\n\n").trim();
 }
 
 function getBangkokDateParts() {
@@ -215,6 +216,34 @@ function formatMoney(amount, english = false) {
   return `${Number(amount).toLocaleString("en-US")} ${english ? "THB" : "บาท"}`;
 }
 
+function addDays(date, days) {
+  const next = new Date(date.getTime());
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatDate(date, english = false) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return english ? `${map.day}/${map.month}/${map.year}` : `${map.day}/${map.month}/${map.year}`;
+}
+
+function getBangkokDateObject() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(`${map.year}-${map.month}-${map.day}T00:00:00+07:00`);
+}
+
 function extractRentalDays(text) {
   const value = String(text || "").toLowerCase();
   const patterns = [
@@ -229,6 +258,35 @@ function extractRentalDays(text) {
   }
 
   if (/สัปดาห์|week|weekly/.test(value)) return 7;
+  if (/เดือน|รายเดือน|month|monthly/.test(value)) return 30;
+  return null;
+}
+
+function isMonthlyRental(text, days) {
+  return /เดือน|รายเดือน|month|monthly/.test(String(text || "").toLowerCase()) || days >= 28;
+}
+
+function extractStartDate(text) {
+  const value = String(text || "").toLowerCase();
+  const today = getBangkokDateObject();
+
+  if (/พรุ่งนี้|tomorrow/.test(value)) {
+    return addDays(today, 1);
+  }
+
+  if (/วันนี้|today/.test(value)) {
+    return today;
+  }
+
+  const explicit = value.match(/(?:เริ่ม|start|starting)\s*(?:วันที่)?\s*(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?/i);
+  if (explicit) {
+    const day = Number(explicit[1]);
+    const month = Number(explicit[2]);
+    let year = explicit[3] ? Number(explicit[3]) : today.getFullYear();
+    if (year < 100) year += 2000;
+    return new Date(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00+07:00`);
+  }
+
   return null;
 }
 
@@ -245,7 +303,8 @@ function calculateRental(deviceName, days, noContract = false, returningCustomer
   const rate = deviceRates.get(deviceName);
   if (!rate) return null;
 
-  const rentalFee = days === 7 ? rate.weekly : days >= 3 && days <= 6 ? rate.daily * days : null;
+  const rentalFee =
+    days >= 28 ? rate.monthly : days === 7 ? rate.weekly : days >= 3 && days <= 6 ? rate.daily * days : null;
   if (rentalFee === null) return { rate };
 
   const discount = returningCustomer ? Math.round(rentalFee * 0.1) : 0;
@@ -307,7 +366,10 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           `💰 Daily: ${formatMoney(rate.daily, true)} / day`,
           `📅 Minimum rental: 3 days`,
           `🗓️ Weekly: ${formatMoney(rate.weekly, true)} / 7 days`,
+          `📆 Monthly: ${formatMoney(rate.monthly, true)} / month`,
           `🔒 Deposit: ${formatMoney(rate.deposit, true)} (refundable on return day)`,
+          "",
+          "Short-term rentals are usually daily or weekly.",
           "",
           "Please tell me how many days you would like to rent, and I can calculate the total for you.",
         ]
@@ -320,7 +382,10 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           `💰 รายวัน: ${formatMoney(rate.daily)} / วัน`,
           `📅 ขั้นต่ำ: 3 วัน`,
           `🗓️ รายสัปดาห์: ${formatMoney(rate.weekly)} / 7 วัน`,
+          `📆 รายเดือน: ${formatMoney(rate.monthly)} / 1 เดือน`,
           `🔒 ค่าประกัน: ${formatMoney(rate.deposit)} ได้คืนวันคืนเครื่อง`,
+          "",
+          "ปกติทางร้านให้เช่าแบบระยะสั้นเป็นรายวันและรายสัปดาห์ครับ",
           "",
           "แจ้งจำนวนวันที่ต้องการเช่าได้เลยครับ เดี๋ยวคำนวณยอดรวมให้ครับ ✅",
         ]
@@ -354,10 +419,14 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           .join("\n");
   }
 
+  const startDate = extractStartDate(customerText);
+  const returnDate = startDate ? addDays(startDate, days) : null;
+  const monthly = isMonthlyRental(customerText, days);
+
   return english
     ? [
         shouldGreetToday ? "Hello 🎮✨" : "",
-        `${deviceName} for ${days} days`,
+        monthly ? `${deviceName} monthly rental` : `${deviceName} for ${days} days`,
         "",
         `💰 Rental fee: ${formatMoney(calc.rentalFee, true)}`,
         calc.discount ? `⭐ Returning customer discount 10%: -${formatMoney(calc.discount, true)}` : "",
@@ -367,6 +436,11 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
         "",
         "📝 Booking payment: 200 THB",
         `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
+        returnDate
+          ? `📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`
+          : "",
+        "",
+        monthly ? "Short-term rentals are usually daily or weekly, but monthly rental is available at this rate." : "",
         "",
         "Please send the start date and Google Maps link so we can check delivery fee.",
       ]
@@ -374,7 +448,7 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
-        `${deviceName} เช่า ${days} วันครับ`,
+        monthly ? `${deviceName} เช่าแบบรายเดือนครับ` : `${deviceName} เช่า ${days} วันครับ`,
         "",
         `💰 ค่าเช่า: ${formatMoney(calc.rentalFee)}`,
         calc.discount ? `⭐ ส่วนลดลูกค้าเก่า 10%: -${formatMoney(calc.discount)}` : "",
@@ -384,6 +458,9 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
         "",
         "📝 โอนจองคิว: 200 บาท",
         `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`,
+        returnDate ? `📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}` : "",
+        "",
+        monthly ? "ปกติทางร้านให้เช่าแบบระยะสั้นเป็นรายวันและรายสัปดาห์ แต่มีเรทรายเดือนให้ตามนี้ครับ" : "",
         "",
         "ถ้าสนใจจอง แจ้งวันเริ่มเช่าและส่งลิงก์ Google Maps ได้เลยครับ 📍",
       ]
@@ -425,6 +502,10 @@ function normalizeSearchText(text) {
     .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function compactSearchText(text) {
+  return normalizeSearchText(text).replace(/[^a-z0-9ก-๙]/gi, "");
 }
 
 function includesGameQuestion(text) {
@@ -506,15 +587,20 @@ async function lookupGameSummary(customerText, { force = false } = {}) {
   }
 
   const queryParts = query.split(" ").filter((part) => part.length >= 3);
+  const compactQuery = compactSearchText(query);
   const matches = [];
 
   for (const game of gameData.games || []) {
     const gameName = normalizeSearchText(game.name);
+    const compactGameName = compactSearchText(game.name);
     const directMatch = gameName.includes(query) || query.includes(gameName);
+    const compactMatch =
+      compactQuery.length >= 3 &&
+      (compactGameName.includes(compactQuery) || compactQuery.includes(compactGameName));
     const tokenMatch =
       queryParts.length > 0 && queryParts.every((part) => gameName.includes(part));
 
-    if (directMatch || tokenMatch) {
+    if (directMatch || compactMatch || tokenMatch) {
       matches.push({
         name: game.name,
         platform: getPlatformName(gameData, game.platformId),
@@ -546,6 +632,95 @@ async function lookupGameSummary(customerText, { force = false } = {}) {
     ...lines,
     "ลิงก์เลือกเกมทั้งหมด: https://ajgamerental2021.github.io/ajconsole/game_index.html",
   ].join("\n");
+}
+
+function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday) {
+  if (!gameSummary) return "";
+
+  const english = isEnglishText(customerText);
+  const notFound = gameSummary.includes("ไม่พบชื่อเกม");
+  const unclear = gameSummary.includes("ยังไม่ได้ระบุชื่อเกมชัดเจน");
+  const lines = gameSummary
+    .split("\n")
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.replace(/^- /, ""));
+
+  if (unclear) {
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          "Which game would you like to check?",
+          "",
+          "You can also browse all games here:",
+          "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          "ต้องการเช็คเกมชื่ออะไรครับ?",
+          "",
+          "หรือเลือกดูเกมทั้งหมดได้ที่ลิงก์นี้เลยครับ",
+          "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  if (notFound || lines.length === 0) {
+    const queried = String(customerText || "")
+      .replace(/มี|เกม|ไหม|มั้ย|ครับ|ค่ะ|คะ|game|available|do you have/gi, "")
+      .trim();
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          `I couldn't find ${queried || "that game"} in the combined game list yet.`,
+          "",
+          "You can browse all available games here:",
+          "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+          "",
+          "If you want, admin can help double-check it for you.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          `เบื้องต้นยังไม่เจอเกม ${queried || "นี้"} ในรายการรวมครับ`,
+          "",
+          "สามารถเลือกดูเกมทั้งหมดได้ที่ลิงก์นี้เลยครับ",
+          "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+          "",
+          "ถ้าต้องการให้แอดมินช่วยเช็คซ้ำ แจ้งได้เลยครับ 🎮✨",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  const gameLines = lines.slice(0, 5).map((line) => `✅ ${line}`);
+
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "I found this game in our list:",
+        "",
+        ...gameLines,
+        "",
+        "You can browse and choose games here:",
+        "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "เจอเกมในรายการของร้านครับ",
+        "",
+        ...gameLines,
+        "",
+        "สามารถเลือกเกมทั้งหมดได้ที่ลิงก์นี้เลยครับ",
+        "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+      ]
+        .filter(Boolean)
+        .join("\n");
 }
 
 function getActivePause(sessionKey) {
@@ -1017,10 +1192,6 @@ app.post("/dialogflow-webhook", async (req, res) => {
     return res.json(pausedReplyText ? dialogflowText(pausedReplyText) : dialogflowEmpty());
   }
 
-  if (!isFallbackIntent(intentName) && queryResult.fulfillmentText) {
-    return res.json(dialogflowText(queryResult.fulfillmentText));
-  }
-
   if (!customerText.trim()) {
     return res.json(dialogflowText("ขอรายละเอียดเพิ่มเติมนิดนึงนะคะ"));
   }
@@ -1031,6 +1202,18 @@ app.post("/dialogflow-webhook", async (req, res) => {
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, deterministicAnswer);
       return res.json(dialogflowText(deterministicAnswer));
+    }
+
+    const gameSummary = await lookupGameSummary(customerText);
+    const gameAnswer = buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday);
+    if (gameAnswer) {
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, gameAnswer);
+      return res.json(dialogflowText(gameAnswer));
+    }
+
+    if (!isFallbackIntent(intentName) && queryResult.fulfillmentText) {
+      return res.json(dialogflowText(queryResult.fulfillmentText));
     }
 
     const sessionContext = [
