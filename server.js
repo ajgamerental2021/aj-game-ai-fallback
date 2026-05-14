@@ -474,6 +474,73 @@ function buildRentNowAnswer(customerText, shouldGreetToday) {
   return lines.filter(Boolean).join("\n");
 }
 
+function includesBookingIntent(text) {
+  const value = normalizeSearchText(text);
+  return /\bจอง\b|จองครับ|จองค่ะ|จองเลย|จองวันที่|จองวัน|ก็จอง|จองด้วย|^book\b|book it|i want to book|please book/.test(value);
+}
+
+function parseExplicitDate(text, fallbackYear) {
+  const m = String(text || "").match(/(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?/);
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  let year = m[3] ? Number(m[3]) : fallbackYear;
+  if (year < 100) year += 2000;
+  return new Date(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00+07:00`);
+}
+
+async function buildPendingNextDateAnswer(customerText, memory, shouldGreetToday) {
+  if (!memory.pendingNextDate) return "";
+  const english = isEnglishText(customerText);
+  const value = normalizeSearchText(customerText);
+
+  const explicitDate = parseExplicitDate(customerText, new Date().getFullYear());
+  const dateOnlyNumberMatch = value.match(/\b(?:วันที่|day|date)\s*(\d{1,2})\b/);
+  const affirm = isAffirmative(customerText) || includesBookingIntent(customerText);
+  if (!affirm && !explicitDate && !dateOnlyNumberMatch) return "";
+
+  let chosenDate = null;
+  if (explicitDate) chosenDate = explicitDate;
+  else if (dateOnlyNumberMatch) {
+    const pendingDate = new Date(memory.pendingNextDate.replace(/(\d{1,2})\/(\d{1,2})\/(\d{4})/, "$3-$2-$1") + "T00:00:00+07:00");
+    if (!isNaN(pendingDate.getTime())) {
+      pendingDate.setDate(Number(dateOnlyNumberMatch[1]));
+      chosenDate = pendingDate;
+    }
+  } else {
+    const pendingDate = new Date(memory.pendingNextDate.replace(/(\d{1,2})\/(\d{1,2})\/(\d{4})/, "$3-$2-$1") + "T00:00:00+07:00");
+    if (!isNaN(pendingDate.getTime())) chosenDate = pendingDate;
+  }
+
+  if (!chosenDate) return "";
+
+  memory.lastStartDate = chosenDate.toISOString();
+  memory.pendingNextDate = "";
+  const device = memory.pendingDevice || memory.lastDevice;
+  memory.pendingDevice = "";
+  if (device) memory.lastDevice = device;
+
+  const days = extractRentalDays(customerText) || memory.lastRentalDays;
+  if (days) memory.lastRentalDays = days;
+
+  if (english) {
+    const lines = [];
+    if (shouldGreetToday) lines.push("Hello 🎮✨");
+    lines.push(`✅ Got it! Booking ${device || "the device"} for ${formatDate(chosenDate, true)}`);
+    if (!days) lines.push("📅 How many days would you like to rent?");
+    lines.push("📍 Please share Google Maps link so admin can confirm delivery fee.");
+    if (days) lines.push("🙏 I'll prepare the full summary once I have the location.");
+    return lines.filter(Boolean).join("\n");
+  }
+  const lines = [];
+  if (shouldGreetToday) lines.push("สวัสดีครับ 🎮✨");
+  lines.push(`✅ รับเรื่องครับ จอง ${device || "เครื่อง"} วันที่ ${formatDate(chosenDate)}`);
+  if (!days) lines.push("📅 เช่าจำนวนกี่วันครับ?");
+  lines.push("📍 รบกวนส่งลิ้งค์ Google Maps จุดจัดส่ง เพื่อให้แอดมินเช็คค่าส่งด้วยครับ");
+  if (days) lines.push("🙏 ได้ลิ้งค์แล้ว เดี๋ยวสรุปรายละเอียดให้อีกครั้งครับ");
+  return lines.filter(Boolean).join("\n");
+}
+
 function includesNoContractIntent(text) {
   const value = normalizeSearchText(text);
   return /ไม่ทำสัญญา|ไม่อยากทำสัญญา|ไม่สะดวกทำสัญญา|ไม่ต้องการสัญญา|ไม่เอาสัญญา|ไม่เซ็นสัญญา|no contract|without contract|skip contract|ไม่แนบบัตร/.test(
@@ -1091,6 +1158,10 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
     : ["⚠️ แจ้งโลเคชั่นจัดส่งเป็นลิ้งค์ Google Maps เพื่อให้แอดมินเช็คค่าส่งด้วยนะครับ", "⚠️ รบกวนอ่านรายละเอียดการเช่าอย่างละเอียดก่อนโอนจอง"];
 
   if (inventoryStatus && !inventoryStatus.available) {
+    if (inventoryStatus.nextDate) {
+      memory.pendingNextDate = inventoryStatus.nextDate;
+      memory.pendingDevice = deviceName;
+    }
     if (english) {
       const lines = [];
       if (shouldGreetToday) lines.push("Hello 🎮✨");
@@ -2857,6 +2928,15 @@ app.post("/dialogflow-webhook", async (req, res) => {
         minutes,
         reason: "gameplay_howto_handoff",
       });
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer, sessionKey);
+      return res.json(dialogflowText(answer));
+    }
+
+    const pendingNextDateAnswer = await buildPendingNextDateAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (pendingNextDateAnswer) {
+      answerBlocks.push(pendingNextDateAnswer);
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, answer, sessionKey);
