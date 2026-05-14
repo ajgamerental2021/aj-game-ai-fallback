@@ -128,10 +128,11 @@ function beautifyReply(text) {
   const spaced = [];
 
   for (const line of lines) {
-    const isVisualLine = /^[🎮📅🗓️💰🔒✅📝🚚⭐⚠️📍🗨️👋✨]/u.test(line);
+    const isVisualLine = /^[🎮📅🗓️📆💰🔒✅📝🚚⭐⚠️📍🗨️👋✨🏦💳💵💸👉❌🚫🔥🎁😊]/u.test(line);
+    const isLinkLine = /^https?:\/\//i.test(line) || /^👉\s*https?:\/\//i.test(line);
     const previous = spaced[spaced.length - 1];
 
-    if (isVisualLine && previous && previous !== "") {
+    if ((isVisualLine || isLinkLine) && previous && previous !== "") {
       spaced.push("");
       spaced.push("");
     }
@@ -210,7 +211,10 @@ function isEnglishText(text) {
   const value = String(text || "");
   const latin = (value.match(/[A-Za-z]/g) || []).length;
   const thai = (value.match(/[\u0E00-\u0E7F]/g) || []).length;
-  return latin > thai;
+  if (thai > 0 && /ครับ|ค่ะ|คะ|ไหม|มั้ย|เช่า|ราคา|วัน|เดือน|โปร|ซื้อ|ขาย/.test(value)) {
+    return false;
+  }
+  return latin > thai && thai === 0;
 }
 
 function formatMoney(amount, english = false) {
@@ -296,10 +300,81 @@ function extractStartDate(text) {
 function includesPriceQuestion(text) {
   const value = normalizeSearchText(text);
   const hasDevice = Boolean(extractDeviceName(text));
+  const monthly = /เดือน|รายเดือน|month|monthly/.test(value);
   return (
     /ราคา|กี่บาท|เท่าไหร่|ค่าเช่า|เรท|สรุป|ยอด|รวม|price|how much|rate|cost|rental fee|summary|total/.test(value) ||
-    (hasDevice && /เช่า|rent|rental/.test(value))
+    (hasDevice && (/เช่า|rent|rental/.test(value) || monthly))
   );
+}
+
+function includesPromotionQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /โปร|โปรโมชั่น|ส่วนลด|ลดราคา|promotion|promo|discount|deal/.test(value);
+}
+
+function includesPurchaseQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /ซื้อ|ขาย|รับซื้อ|มีขาย|จำหน่าย|สั่งซื้อ|purchase|buy|sell|sale|for sale/.test(value);
+}
+
+function buildPromotionAnswer(customerText, shouldGreetToday) {
+  if (!includesPromotionQuestion(customerText)) return "";
+
+  const english = isEnglishText(customerText);
+
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "Current promotions 🔥🎁",
+        "",
+        "🚚 Delivery promotion",
+        "Rent 3-6 days: return delivery subsidy up to 100 THB",
+        "Rent 7+ days: outbound and return delivery subsidy up to 100 THB each way",
+        "",
+        "⭐ Returning customer discount",
+        "Returning customers get 10% off the rental fee for the next rental",
+        "",
+        "Deposit and delivery fee differences are not discounted.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "ตอนนี้มีโปรโมชั่นตามนี้ครับ 🔥🎁",
+        "",
+        "🚚 โปรค่าจัดส่ง",
+        "เช่า 3-6 วัน: ร้านช่วยค่าส่งขากลับสูงสุด 100 บาท",
+        "เช่า 7 วันขึ้นไป: ร้านช่วยค่าส่งขาไปและขากลับ สูงสุดเที่ยวละ 100 บาท",
+        "",
+        "⭐ ส่วนลดลูกค้าเก่า",
+        "ลูกค้าเก่าที่เคยเช่าแล้ว มีส่วนลดค่าเช่า 10% ในครั้งถัดไปครับ",
+        "",
+        "หมายเหตุ: ส่วนลดคิดจากค่าเช่า ไม่รวมค่าประกันและส่วนต่างค่าส่งครับ ✅",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function buildPurchasePauseReply(customerText, shouldGreetToday) {
+  const english = isEnglishText(customerText);
+
+  return english
+    ? [
+        shouldGreetToday ? "Hello 👋" : "",
+        "🛒 For purchase/sales inquiries, admin will take care of you shortly.",
+        "",
+        "I’ll pause the automated reply now so our team can continue directly. ✅",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 👋" : "",
+        "🛒 เรื่องซื้อ/ขายสินค้า แอดมินจะเข้ามาดูแลให้นะครับ",
+        "",
+        "ระบบจะพักการตอบอัตโนมัติไว้ก่อน เพื่อให้แอดมินคุยต่อโดยตรงครับ ✅",
+      ]
+        .filter(Boolean)
+        .join("\n");
 }
 
 function calculateRental(deviceName, days, noContract = false, returningCustomer = false) {
@@ -454,10 +529,8 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           `💰 Daily: ${formatMoney(rate.daily, true)} / day`,
           `📅 Minimum rental: 3 days`,
           `🗓️ Weekly: ${formatMoney(rate.weekly, true)} / 7 days`,
-          `📆 Monthly: ${formatMoney(rate.monthly, true)} / month`,
+          isMonthlyRental(customerText, 0) ? `📆 Monthly: ${formatMoney(rate.monthly, true)} / month` : "",
           `🔒 Deposit: ${formatMoney(rate.deposit, true)} (refundable on return day)`,
-          "",
-          "Short-term rentals are usually daily or weekly.",
           "",
           "Please tell me how many days you would like to rent, and I can calculate the total for you.",
         ]
@@ -470,10 +543,8 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           `💰 รายวัน: ${formatMoney(rate.daily)} / วัน`,
           `📅 ขั้นต่ำ: 3 วัน`,
           `🗓️ รายสัปดาห์: ${formatMoney(rate.weekly)} / 7 วัน`,
-          `📆 รายเดือน: ${formatMoney(rate.monthly)} / 1 เดือน`,
+          isMonthlyRental(customerText, 0) ? `📆 รายเดือน: ${formatMoney(rate.monthly)} / 1 เดือน` : "",
           `🔒 ค่าประกัน: ${formatMoney(rate.deposit)} ได้คืนวันคืนเครื่อง`,
-          "",
-          "ปกติทางร้านให้เช่าแบบระยะสั้นเป็นรายวันและรายสัปดาห์ครับ",
           "",
           "แจ้งจำนวนวันที่ต้องการเช่าได้เลยครับ เดี๋ยวคำนวณยอดรวมให้ครับ ✅",
         ]
@@ -562,7 +633,7 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
 
 function includesAdminRequest(text) {
   const value = normalizeSearchText(text);
-  return /แอดมิน|admin|คนจริง|พนักงาน|เจ้าหน้าที่|ติดต่อคน|คุยกับคน|human|staff|agent|representative/.test(
+  return /แอดมิน|admin|คนจริง|พนักงาน|เจ้าหน้าที่|ติดต่อคน|คุยกับคน|human|staff|agent|representative|operator/.test(
     value,
   );
 }
@@ -572,7 +643,7 @@ function buildAdminPauseReply(customerText, shouldGreetToday) {
   return english
     ? [
         shouldGreetToday ? "Hello 👋" : "",
-        "🗨️ Admin will take care of you shortly.",
+        "🗨️ Admin will take care of you shortly. 😊",
         "",
         "I’ll pause the automated reply now so our team can continue the conversation directly.",
       ]
@@ -580,7 +651,7 @@ function buildAdminPauseReply(customerText, shouldGreetToday) {
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 👋" : "",
-        "🗨️ แอดมินจะเข้ามาดูแลให้นะครับ",
+        "🗨️ แอดมินจะเข้ามาดูแลให้นะครับ 😊",
         "",
         "ระบบจะพักการตอบอัตโนมัติไว้ก่อน เพื่อให้แอดมินคุยต่อโดยตรงครับ ✅",
       ]
@@ -825,7 +896,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
   return english
     ? [
         shouldGreetToday ? "Hello 🎮✨" : "",
-        "I found this game in our list:",
+        "This game is available from our shop 😊🎮✨",
         "",
         ...gameLines,
         "",
@@ -836,7 +907,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
-        "เจอเกมในรายการของร้านครับ",
+        "ทางร้านมีให้บริการครับ 😊🎮✨",
         "",
         ...gameLines,
         "",
@@ -1324,6 +1395,28 @@ app.post("/dialogflow-webhook", async (req, res) => {
     return res.json(dialogflowText(answer));
   }
 
+  if (includesPurchaseQuestion(customerText)) {
+    const answer = buildPurchasePauseReply(customerText, shouldGreetToday);
+    const minutes = 120;
+    const expiresAt = Date.now() + minutes * 60 * 1000;
+
+    pausedSessions.set(sessionKey, {
+      expiresAt,
+      reason: "purchase_or_sales_inquiry",
+    });
+
+    await persistPauseToWebhook({
+      sessionKey,
+      customerId: sessionKey,
+      minutes,
+      reason: "purchase_or_sales_inquiry",
+    });
+
+    memory.greetedDate = today.dateKey;
+    updateRecentMessages(memory, customerText, answer);
+    return res.json(dialogflowText(answer));
+  }
+
   const activePause = await getEffectivePause(sessionKey, dialogflowSession);
   if (activePause) {
     console.log("AI paused for session:", {
@@ -1340,6 +1433,13 @@ app.post("/dialogflow-webhook", async (req, res) => {
   }
 
   try {
+    const promotionAnswer = buildPromotionAnswer(customerText, shouldGreetToday);
+    if (promotionAnswer) {
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, promotionAnswer);
+      return res.json(dialogflowText(promotionAnswer));
+    }
+
     const deterministicAnswer = buildPriceAnswer(customerText, memory, shouldGreetToday);
     if (deterministicAnswer) {
       memory.greetedDate = today.dateKey;
