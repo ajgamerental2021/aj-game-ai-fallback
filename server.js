@@ -374,6 +374,7 @@ function extractStartDate(text) {
 
 function includesPriceQuestion(text, memory = {}) {
   if (includesAccountRentalQuestion(text)) return false;
+  if (includesIncludedGamesQuestion(text)) return false;
   const value = normalizeSearchText(text);
   const hasDevice = Boolean(extractDeviceName(text) || memory.lastDevice);
   const monthly = /เดือน|รายเดือน|month|monthly/.test(value);
@@ -397,6 +398,64 @@ function includesLongTermRentalQuestion(text) {
 function includesPromotionQuestion(text) {
   const value = normalizeSearchText(text);
   return /โปร|โปรโมชั่น|ส่วนลด|ลดราคา|promotion|promo|discount|deal/.test(value);
+}
+
+function includesIncludedGamesQuestion(text) {
+  const value = normalizeSearchText(text);
+  if (/ไอดี|account|psn/.test(value)) return false;
+  const tightPatterns = [
+    /รวมเกม/,
+    /แถมเกม/,
+    /พร้อมเกม/,
+    /เกมในเครื่อง/,
+    /เกมมาด้วย/,
+    /เกมมาให้/,
+    /มีเกมมา(ให้|ด้วย|พร้อม)/,
+    /มีเกมใน(เครื่อง|นี้)/,
+    /เครื่องนี้มีเกม/,
+    /^มีเกมไหม$/,
+    /^มีเกมมั้ย$/,
+    /games\s*included/,
+    /with\s*games?\b/,
+    /come\s*with\s*games?/,
+    /bundled\s*games?/,
+  ];
+  return tightPatterns.some((re) => re.test(value));
+}
+
+function buildIncludedGamesAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesIncludedGamesQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  const device = memory.lastDevice || (english ? "the console" : "เครื่อง");
+  const isPS5Family = /PS5|PS4|PS Portal|PS VR2/i.test(memory.lastDevice || "");
+  const gameLink = isPS5Family
+    ? "https://ajgamerental2021.github.io/ajconsole/game_index.html"
+    : "https://ajgamerental2021.github.io/ajconsole/game_index.html";
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        `🎮 Yes! ${device} rental comes with games included`,
+        "",
+        "✨ Pick up to 10 games per rental",
+        "📚 Browse all games:",
+        `👉 ${gameLink}`,
+        "",
+        "🙏 Just send me the game names you want, I'll prepare them.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        `🎮 ใช่ครับ! เช่า${device} รวมเกมให้ด้วย`,
+        "",
+        "✨ เลือกได้สูงสุด 10 เกม ต่อการเช่า 1 ครั้ง",
+        "📚 ดูรายการเกมทั้งหมด:",
+        `👉 ${gameLink}`,
+        "",
+        "🙏 แจ้งชื่อเกมที่อยากได้มาเลย เดี๋ยวจัดเตรียมให้ครับ",
+      ]
+        .filter(Boolean)
+        .join("\n");
 }
 
 function includesAccountRentalQuestion(text) {
@@ -1163,7 +1222,8 @@ function includesGameQuestion(text) {
     includesTermsQuestion(text) ||
     includesPromotionQuestion(text) ||
     includesAccountRentalQuestion(text) ||
-    includesGameplayHowToQuestion(text)
+    includesGameplayHowToQuestion(text) ||
+    includesIncludedGamesQuestion(text)
   ) {
     return false;
   }
@@ -1852,6 +1912,9 @@ async function askAI(customerText, memory, sessionContext) {
         "ถ้าลูกค้าถามว่าเครื่องรุ่นใดว่างหรือไม่ ให้ใช้ข้อมูลสต็อกจาก Google Sheet ที่แนบมา",
         "ถ้าเครื่องมี Status = Available อย่างน้อย 1 เครื่อง ให้ตอบว่าว่าง แต่ถ้าลูกค้าต้องการจองตามวันที่เฉพาะ ให้แจ้งว่าจะให้แอดมินเช็คคิวและยืนยันอีกครั้ง",
         "ถ้าลูกค้าถามว่ามีเกมนี้ไหม ให้ใช้ข้อมูลเกมจาก Gist ที่แนบมา ถ้าไม่พบให้ส่งลิงก์เลือกเกมทั้งหมด",
+        "ถ้าลูกค้าถาม 'รวมเกมไหม' 'มีเกมมาให้ไหม' 'แถมเกมไหม' 'พร้อมเกมไหม' 'เครื่องนี้มีเกมอะไรบ้าง' ห้ามตีความว่าเป็นชื่อเกม → ตอบว่ารวมเกมให้ ลูกค้าเลือกได้สูงสุด 10 เกม จากลิงก์ game_index.html",
+        "ถ้าข้อความลูกค้าสั้น ไม่มีชื่อเกมจริง ๆ และดูเหมือนถามว่า 'มีเกมหรือเปล่า' → ตีความเป็นถามเกมที่แถม ไม่ใช่ค้นหาเกม",
+        "อ่าน context ก่อนตอบ: ถ้าก่อนหน้าลูกค้าถามราคาเครื่อง X และถามต่อด้วยคำสั้น ๆ เช่น 'มีเกมไหม' 'รวมไหม' ให้ตีความเป็นถามว่าเช่าเครื่อง X รวมเกมหรือไม่",
         "ถ้าลูกค้าถามเช่าในนามบริษัทหรือใบกำกับภาษี ห้ามตีความเป็นคำถามเกม ให้ตอบเงื่อนไขบริษัทและขอชื่อบริษัท",
         "ถ้าลูกค้าถามเลือกเกม ให้ส่งลิงก์ https://ajgamerental2021.github.io/ajconsole/game_index.html",
         "ถ้าลูกค้าบอกว่าต้องการเช่าต่อ ให้ใช้ lastDevice จาก context ถ้ามีจำนวนวันให้คำนวณค่าเช่าต่อพร้อมส่วนลดลูกค้าเก่า 10% ถ้าไม่มีจำนวนวันให้ถามจำนวนวัน",
@@ -2401,6 +2464,15 @@ app.post("/dialogflow-webhook", async (req, res) => {
         minutes,
         reason: "gameplay_howto_handoff",
       });
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer);
+      return res.json(dialogflowText(answer));
+    }
+
+    const includedGamesAnswer = buildIncludedGamesAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (includedGamesAnswer) {
+      answerBlocks.push(includedGamesAnswer);
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, answer);
