@@ -452,7 +452,7 @@ function isWithinBusinessHours() {
 
 function includesRentNowQuestion(text) {
   const value = normalizeSearchText(text);
-  return /(เช่า.{0,4}ตอนนี้|ตอนนี้.{0,4}ว่าง|เช่าเลย|เอาตอนนี้|เอาเลย|รับเครื่องตอนนี้|rent now|right now|today now|available now)/.test(
+  return /(เช่า.{0,4}ตอนนี้|ตอนนี้.{0,4}ว่าง|เช่าเลย|เอาตอนนี้|เอาเลย|รับเครื่องตอนนี้|รับวันนี้เลย|ส่งวันนี้เลย|rent now|right now|today now|deliver today|same day|same-day|asap)/.test(
     value,
   );
 }
@@ -483,7 +483,7 @@ function includesNoContractIntent(text) {
 
 function isAffirmative(text) {
   const value = normalizeSearchText(text);
-  return /^(โอเค|โอเก|ok|okay|ใช่|ตกลง|เอา|รับทราบ|จัดเลย|ได้|ได้ครับ|ได้ค่ะ|yes|y|yep|sure|confirm|ตามนั้น)\b/.test(value);
+  return /^(โอเค|โอเก|โอเค ?(ไม่ทำ)?สัญญา|ok|okay|k|kk|ใช่|ใช่ครับ|ใช่ค่ะ|ตกลง|เอา|เอาครับ|เอาค่ะ|เอาเลย|รับทราบ|จัดเลย|ได้|ได้ครับ|ได้ค่ะ|yes|y|yep|yup|sure|confirm|confirmed|ตามนั้น|go ahead|proceed)\b/.test(value);
 }
 
 async function buildNoContractConfirmAnswer(customerText, memory, shouldGreetToday) {
