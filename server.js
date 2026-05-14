@@ -11,7 +11,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "missing-openai-api-key",
 });
 
-const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const model = process.env.OPENAI_MODEL || "gpt-4o";
 const aiTimeoutMs = Number(process.env.AI_TIMEOUT_MS || 3500);
 const inventorySheetId =
   process.env.INVENTORY_SHEET_ID || "13QZWpd_E-L_0G_Xd0zSL5_OcgV4sdwk9febXZSkZepc";
@@ -30,6 +30,7 @@ const pauseSheetGid = process.env.PAUSE_SHEET_GID || "";
 const pauseSheetCacheMs = Number(process.env.PAUSE_SHEET_CACHE_MS || 30000);
 const pauseSheetFetchTimeoutMs = Number(process.env.PAUSE_SHEET_FETCH_TIMEOUT_MS || 3000);
 const pauseWebhookUrl = process.env.PAUSE_WEBHOOK_URL || "";
+const defaultPauseMinutes = Number(process.env.DEFAULT_PAUSE_MINUTES || 720);
 
 let knowledgeBase = "";
 let inventoryCache = {
@@ -46,6 +47,7 @@ let pauseSheetCache = {
 };
 const conversationMemory = new Map();
 const pausedSessions = new Map();
+const recentSessions = new Map();
 
 const deviceRates = new Map([
   ["PS4", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
@@ -72,8 +74,8 @@ const deviceAliases = [
   ["Nintendo Switch 2", ["nintendo switch 2", "switch 2", "ns2", "n2"]],
   ["Nintendo Switch 1", ["nintendo switch 1", "switch 1", "switch"]],
   ["Steam Deck OLED", ["steam deck oled", "steam deck", "steam"]],
-  ["Xbox Series X", ["xbox series x", "series x"]],
-  ["Xbox Series S", ["xbox series s", "series s"]],
+  ["Xbox Series X", ["xbox series x", "series x", "xbox x", "xbox sx", "xsx"]],
+  ["Xbox Series S", ["xbox series s", "series s", "xbox s", "xbox ss", "xss"]],
   ["Meta Quest 3s", ["meta quest 3s", "quest 3s", "mq3s"]],
   ["Meta Quest 3", ["meta quest 3", "quest 3", "mq3"]],
   ["Viture Beast", ["viture beast", "beast"]],
@@ -81,11 +83,11 @@ const deviceAliases = [
   ["Viture Luma Pro", ["viture luma pro", "luma pro"]],
   ["XREAL One", ["xreal one", "xreal"]],
   ["Logitech G29", ["logitech g29", "g29"]],
-  ["PS5 Pro", ["ps5 pro", "playstation 5 pro", "เพลย์ 5 pro", "เพลย์5 pro"]],
-  ["PS Portal", ["ps portal", "portal"]],
-  ["PS VR2", ["ps vr2", "psvr2", "vr2"]],
-  ["PS5", ["ps5", "playstation 5", "เพลย์ 5", "เพลย์5"]],
-  ["PS4", ["ps4", "playstation 4", "เพลย์ 4", "เพลย์4"]],
+  ["PS5 Pro", ["ps5 pro", "ps 5 pro", "playstation 5 pro", "เพลย์ 5 pro", "เพลย์5 pro", "เพลย์สเตชั่น 5 pro"]],
+  ["PS Portal", ["ps portal", "psportal", "portal", "พอร์ทัล"]],
+  ["PS VR2", ["ps vr2", "psvr2", "vr2", "วีอาร์2"]],
+  ["PS5", ["ps5", "ps 5", "playstation 5", "เพลย์ 5", "เพลย์5", "เพลย์สเตชั่น 5", "เพล5"]],
+  ["PS4", ["ps4", "ps 4", "playstation 4", "เพลย์ 4", "เพลย์4", "เพลย์สเตชั่น 4"]],
 ];
 
 async function loadKnowledgeBase() {
@@ -134,13 +136,12 @@ function beautifyReply(text) {
 
     if ((isVisualLine || isLinkLine) && previous && previous !== "") {
       spaced.push("");
-      spaced.push("");
     }
 
     spaced.push(line);
   }
 
-  return spaced.join("\n").replace(/\n{4,}/g, "\n\n\n").trim();
+  return spaced.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function getBangkokDateParts() {
@@ -183,6 +184,8 @@ function getMemory(sessionKey) {
       greetedDate: "",
       lastDevice: "",
       lastGameQuery: "",
+      lastReturnDate: "",
+      lastRentalDays: null,
       lastMessages: [],
     });
   }
@@ -202,6 +205,38 @@ function extractDeviceName(text) {
   return "";
 }
 
+function detectAmbiguousDevice(text) {
+  const value = String(text || "").toLowerCase();
+  if (extractDeviceName(text)) return "";
+  if (/\bxbox\b/.test(value) || /เอ็กซ์บ็อกซ์|เอ็กบ็อก/.test(value)) return "xbox";
+  if (/\bps\b|\bplaystation\b|เพลย์/.test(value) && !/ps[345]|ps\s*portal|ps\s*vr|psvr/.test(value)) return "playstation";
+  if (/\bswitch\b|นินเทนโด|นินเทน/.test(value) && !/switch\s*[12]|ns[12]\b/.test(value)) return "switch";
+  if (/\bquest\b/.test(value) && !/quest\s*3s?|mq3/.test(value)) return "quest";
+  return "";
+}
+
+function buildAmbiguousDeviceAnswer(token, english, shouldGreetToday) {
+  const greet = english ? "Hello 🎮✨" : "สวัสดีครับ 🎮✨";
+  const lines = [];
+  if (shouldGreetToday) lines.push(greet);
+  if (token === "xbox") {
+    lines.push(english ? "🎮 Xbox Series X or Series S?" : "🎮 สนใจ Xbox Series X หรือ Series S ครับ?");
+    lines.push("");
+    lines.push(english ? "⚡️ Series X: 350 THB/day · 1,800/week · 5,000/month" : "⚡️ Series X: 350 บาท/วัน · 1,800/สัปดาห์ · 5,000/เดือน");
+    lines.push(english ? "🟢 Series S: 300 THB/day · 1,500/week · 4,000/month" : "🟢 Series S: 300 บาท/วัน · 1,500/สัปดาห์ · 4,000/เดือน");
+    lines.push("");
+    lines.push(english ? "🙏 Tell me the model and number of days, I'll quote the total." : "🙏 แจ้งรุ่นและจำนวนวันได้เลยครับ จะคำนวณยอดให้ทันที");
+  } else if (token === "playstation") {
+    lines.push(english ? "🎮 Which PlayStation?" : "🎮 สนใจ PS รุ่นไหนครับ?");
+    lines.push(english ? "🔹 PS4 / PS5 / PS5 Pro / PS Portal / PS VR2" : "🔹 PS4 / PS5 / PS5 Pro / PS Portal / PS VR2");
+  } else if (token === "switch") {
+    lines.push(english ? "🎮 Nintendo Switch 1 or Switch 2?" : "🎮 Nintendo Switch 1 หรือ Switch 2 ครับ?");
+  } else if (token === "quest") {
+    lines.push(english ? "🥽 Meta Quest 3 or Quest 3s?" : "🥽 Meta Quest 3 หรือ Quest 3s ครับ?");
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
 function updateRecentMessages(memory, customerText, answer = "") {
   memory.lastMessages.push({ customerText, answer });
   memory.lastMessages = memory.lastMessages.slice(-4);
@@ -211,10 +246,14 @@ function isEnglishText(text) {
   const value = String(text || "");
   const latin = (value.match(/[A-Za-z]/g) || []).length;
   const thai = (value.match(/[\u0E00-\u0E7F]/g) || []).length;
-  if (thai > 0 && /ครับ|ค่ะ|คะ|ไหม|มั้ย|เช่า|ราคา|วัน|เดือน|โปร|ซื้อ|ขาย/.test(value)) {
+  if (thai > 0) {
     return false;
   }
   return latin > thai && thai === 0;
+}
+
+function chooseVariant(variants) {
+  return variants[Math.floor(Math.random() * variants.length)];
 }
 
 function formatMoney(amount, english = false) {
@@ -273,6 +312,14 @@ function isMonthlyRental(text, days) {
   return /เดือน|รายเดือน|month|monthly/.test(String(text || "").toLowerCase()) || days >= 28;
 }
 
+function extractRentalMonths(text) {
+  const value = String(text || "").toLowerCase();
+  const match = value.match(/(\d+)\s*(?:เดือน|months|month|mo)/i);
+  if (match) return Number(match[1]);
+  if (/หลายเดือน|หลาย ๆ เดือน|หลายๆเดือน|multi month|long term|long-term|monthly/.test(value)) return null;
+  return null;
+}
+
 function extractStartDate(text) {
   const value = String(text || "").toLowerCase();
   const today = getBangkokDateObject();
@@ -297,19 +344,107 @@ function extractStartDate(text) {
   return null;
 }
 
-function includesPriceQuestion(text) {
+function includesPriceQuestion(text, memory = {}) {
+  if (includesAccountRentalQuestion(text)) return false;
   const value = normalizeSearchText(text);
-  const hasDevice = Boolean(extractDeviceName(text));
+  const hasDevice = Boolean(extractDeviceName(text) || memory.lastDevice);
   const monthly = /เดือน|รายเดือน|month|monthly/.test(value);
+  const hasRentalDays = Boolean(extractRentalDays(text));
+  const hasStartDate = Boolean(extractStartDate(text));
+  const rentalContext = /เช่า|rent|rental|วัน|พรุ่งนี้|วันนี้|tomorrow|today|เริ่ม|start/.test(value);
+
   return (
     /ราคา|กี่บาท|เท่าไหร่|ค่าเช่า|เรท|สรุป|ยอด|รวม|price|how much|rate|cost|rental fee|summary|total/.test(value) ||
-    (hasDevice && (/เช่า|rent|rental/.test(value) || monthly))
+    (hasDevice && (/เช่า|rent|rental/.test(value) || monthly || (rentalContext && (hasRentalDays || hasStartDate))))
+  );
+}
+
+function includesLongTermRentalQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /หลายเดือน|หลาย ๆ เดือน|หลายๆเดือน|รายเดือน|เดือน|monthly|month|months|long term|long-term|multi month/.test(
+    value,
   );
 }
 
 function includesPromotionQuestion(text) {
   const value = normalizeSearchText(text);
   return /โปร|โปรโมชั่น|ส่วนลด|ลดราคา|promotion|promo|discount|deal/.test(value);
+}
+
+function includesAccountRentalQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /ไอดี|ไอดีเกม|game id|account|psn|รหัสเกม/.test(value);
+}
+
+function buildAccountRentalAnswer(customerText, shouldGreetToday) {
+  if (!includesAccountRentalQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "🆔 PS5 game account rental is available!",
+        "",
+        "📚 Browse the full list, prices, and terms here:",
+        "👉 https://ajgamerental2021.github.io/ajgameid/",
+        "",
+        "🙏 Need admin to double-check? Just let me know.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "🆔 มีบริการเช่าไอดีเกม PS5 ครับ!",
+        "",
+        "📚 ดูรายการ ราคา และเงื่อนไขทั้งหมดได้ที่ลิงก์นี้เลย:",
+        "👉 https://ajgamerental2021.github.io/ajgameid/",
+        "",
+        "🙏 ถ้าต้องการให้แอดมินช่วยเช็คเพิ่ม แจ้งได้เลยครับ",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function includesTermsQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /ข้อกำหนด|เงื่อนไข|กติกา|รายละเอียด|ต้องใช้อะไร|ใช้เอกสาร|มัดจำ|ประกัน|สัญญา|terms|condition|requirement|deposit|agreement/.test(
+    value,
+  );
+}
+
+function buildTermsAnswer(customerText, shouldGreetToday) {
+  if (!includesTermsQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "Rental conditions 📝",
+        "✅ Minimum 3 days",
+        "✅ Deposit refunded on return day",
+        "✅ Rental agreement + ID card copy required",
+        "✅ Delivery to Bangkok & metropolitan area only",
+        "❌ No separate accessory rental",
+        "🚫 Customer cancellation → 200 THB booking fee non-refundable",
+        "🚫 Early return → unused rental difference non-refundable",
+        "",
+        "If you skip the rental agreement, deposit increases (5,000 / 8,000 THB depending on device).",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "เงื่อนไขการเช่า 📝",
+        "✅ เช่าขั้นต่ำ 3 วัน",
+        "✅ ค่าประกันคืนเต็มจำนวนวันคืนเครื่อง",
+        "✅ ต้องทำสัญญาเช่า + แนบสำเนาบัตรประชาชน",
+        "✅ ส่งเฉพาะกรุงเทพ-ปริมณฑล",
+        "❌ ไม่มีเช่าอุปกรณ์แยก",
+        "🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท",
+        "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง",
+        "",
+        "ถ้าไม่ทำสัญญา ค่าประกันปรับเป็น 5,000 / 8,000 บาท แล้วแต่รุ่นเครื่องครับ",
+      ]
+        .filter(Boolean)
+        .join("\n");
 }
 
 function includesPurchaseQuestion(text) {
@@ -486,7 +621,7 @@ function buildEnglishPaymentLines(calc, noContract) {
 }
 
 function buildPriceAnswer(customerText, memory, shouldGreetToday) {
-  if (!includesPriceQuestion(customerText)) return "";
+  if (!includesPriceQuestion(customerText, memory)) return "";
 
   const english = isEnglishText(customerText);
   const deviceName = extractDeviceName(customerText) || memory.lastDevice;
@@ -513,7 +648,7 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
 
   memory.lastDevice = deviceName;
 
-  const days = extractRentalDays(customerText);
+  const days = extractRentalDays(customerText) || memory.lastRentalDays || null;
   const noContract = includesNoContractRequest(customerText);
   const returningCustomer = /ลูกค้าเก่า|เคยเช่า|returning|old customer/i.test(customerText);
   const calc = days ? calculateRental(deviceName, days, noContract, returningCustomer) : null;
@@ -581,6 +716,15 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   const startDate = extractStartDate(customerText);
   const returnDate = startDate ? addDays(startDate, days) : null;
   const monthly = isMonthlyRental(customerText, days);
+  const includePayment = summaryRequest || Boolean(startDate);
+
+  if (returnDate) {
+    memory.lastReturnDate = returnDate.toISOString();
+    memory.lastRentalDays = days;
+  }
+  if (startDate) {
+    memory.lastStartDate = startDate.toISOString();
+  }
 
   return english
     ? [
@@ -601,9 +745,8 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
         "",
         monthly ? "Short-term rentals are usually daily or weekly, but monthly rental is available at this rate." : "",
         "",
-        ...(summaryRequest ? buildEnglishPaymentLines(calc, noContract) : []),
-        summaryRequest ? "" : "",
-        "Please send the start date and Google Maps link so we can check delivery fee.",
+        ...(includePayment ? buildEnglishPaymentLines(calc, noContract) : []),
+        startDate ? "" : "Please send the start date and Google Maps link so we can check delivery fee.",
       ]
         .filter(Boolean)
         .join("\n")
@@ -623,9 +766,291 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
         "",
         monthly ? "ปกติทางร้านให้เช่าแบบระยะสั้นเป็นรายวันและรายสัปดาห์ แต่มีเรทรายเดือนให้ตามนี้ครับ" : "",
         "",
-        ...(summaryRequest ? buildThaiPaymentLines(calc, noContract) : []),
-        summaryRequest ? "" : "",
-        "ถ้าสนใจจอง แจ้งวันเริ่มเช่าและส่งลิงก์ Google Maps ได้เลยครับ 📍",
+        ...(includePayment ? buildThaiPaymentLines(calc, noContract) : []),
+        startDate ? "" : "ถ้าสนใจจอง แจ้งวันเริ่มเช่าและส่งลิงก์ Google Maps ได้เลยครับ 📍",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function buildLongTermRentalAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesLongTermRentalQuestion(customerText)) return "";
+
+  const english = isEnglishText(customerText);
+  const deviceName = extractDeviceName(customerText) || memory.lastDevice;
+  const months = extractRentalMonths(customerText);
+
+  if (!deviceName || !deviceRates.has(deviceName)) {
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          "Monthly rental is available for some devices 😊🎮",
+          "",
+          "Which device are you interested in?",
+          "",
+          "Please send the device model and rental start date, then admin can check the queue and confirm the monthly booking.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          "มีเรทรายเดือนสำหรับบางเครื่องครับ 😊🎮",
+          "",
+          "สนใจเป็นเครื่องรุ่นไหนครับ?",
+          "",
+          "แจ้งชื่อเครื่องและวันที่เริ่มเช่าได้เลยครับ เดี๋ยวช่วยเช็คคิวและสรุปรายเดือนให้ครับ ✅",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  memory.lastDevice = deviceName;
+
+  const rate = deviceRates.get(deviceName);
+  const rentalFee = rate.monthly * (months || 1);
+  const total = rentalFee + rate.deposit;
+  const monthLabel = months || 1;
+
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        `${deviceName} monthly rental is available 😊🎮`,
+        "",
+        `📆 Monthly rental: ${formatMoney(rate.monthly, true)} / month`,
+        months ? `🗓️ Duration: ${months} months` : "",
+        months ? `💰 Rental fee: ${formatMoney(rentalFee, true)}` : "",
+        `🔒 Deposit: ${formatMoney(rate.deposit, true)} (refundable on return day)`,
+        months ? `✅ Total before delivery: ${formatMoney(total, true)}` : "",
+        "",
+        "Please send the start date and Google Maps link so admin can check the queue and delivery fee.",
+        months ? "" : "If you already know how many months, please tell me and I can calculate the total.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        `${deviceName} มีเรทรายเดือนครับ 😊🎮`,
+        "",
+        `📆 รายเดือน: ${formatMoney(rate.monthly)} / 1 เดือน`,
+        months ? `🗓️ ระยะเวลา: ${monthLabel} เดือน` : "",
+        months ? `💰 ค่าเช่า: ${formatMoney(rentalFee)}` : "",
+        `🔒 ค่าประกัน: ${formatMoney(rate.deposit)} ได้คืนวันคืนเครื่อง`,
+        months ? `✅ รวมสุทธิ: ${formatMoney(total)}` : "",
+        "",
+        "แจ้งวันที่เริ่มเช่าและลิงก์ Google Maps ได้เลยครับ เดี๋ยวช่วยเช็คคิวและค่าส่งให้ครับ 📍",
+        months ? "" : "ถ้าทราบจำนวนเดือนแล้ว แจ้งมาได้เลยครับ เดี๋ยวคำนวณยอดรวมให้ครับ ✅",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function includesBusinessRentalQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /นามบริษัท|ในบริษัท|บริษัท|ใบกำกับ|ใบเสร็จ|tax invoice|receipt|company rental|under company|company name|corporate/.test(
+    value,
+  );
+}
+
+function buildBusinessRentalAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesBusinessRentalQuestion(customerText)) return "";
+
+  const english = isEnglishText(customerText);
+  const deviceName = extractDeviceName(customerText) || memory.lastDevice;
+  if (deviceName) {
+    memory.lastDevice = deviceName;
+  }
+
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "Company rental is available 😊🧾",
+        "",
+        "✅ Can issue tax invoice / receipt",
+        "✅ No rental agreement required",
+        "✅ No ID card copy required",
+        "",
+        "Company rental rate is higher than individual rental.",
+        "",
+        "Please send these details so admin can quote correctly:",
+        deviceName ? `🎮 Device: ${deviceName}` : "🎮 Device you want to rent",
+        "📅 Start date and rental duration",
+        "🏢 Company name",
+        "📍 Google Maps link for delivery fee check",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "เช่าในนามบริษัท ทางร้านมีให้บริการครับ 😊🧾",
+        "",
+        "✅ สามารถออกใบกำกับภาษี / ใบเสร็จได้",
+        "✅ ไม่ต้องทำสัญญาการเช่า",
+        "✅ ไม่ต้องแนบสำเนาบัตรประชาชนผู้เช่า",
+        "",
+        "ราคาเช่าในนามบริษัทจะสูงกว่าเรทบุคคลครับ",
+        "",
+        "รบกวนแจ้งข้อมูลนี้เพื่อให้แอดมินเสนอราคาได้ถูกต้องครับ",
+        deviceName ? `🎮 เครื่อง: ${deviceName}` : "🎮 เครื่องที่ต้องการเช่า",
+        "📅 วันที่เริ่มเช่า และจำนวนวัน",
+        "🏢 ชื่อบริษัท",
+        "📍 ลิงก์ Google Maps เพื่อเช็คค่าส่ง",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function includesExtensionRequest(text) {
+  const value = normalizeSearchText(text);
+  return /เช่าต่อ|ต่ออีก|ต่อ\s*\d+|extend|extension|rent longer|continue rental/.test(value);
+}
+
+function includesReturnRequest(text) {
+  const value = normalizeSearchText(text);
+  return /คืนเครื่อง|ส่งคืน|นัดคืน|ต้องการคืน|return device|return the device|pickup return/.test(value);
+}
+
+function buildReturnAnswer(customerText, shouldGreetToday) {
+  if (!includesReturnRequest(customerText)) return "";
+
+  const english = isEnglishText(customerText);
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "Sure, for returning the device, please confirm these details 📦✅",
+        "",
+        "📍 Is the return pickup location the same as the delivery location?",
+        "",
+        "🕒 What time would you like us to arrange the return pickup?",
+        "",
+        "If you want the deposit refunded immediately, the return location needs a TV and/or power outlet so we can check the device first.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "ได้ครับ สำหรับการคืนเครื่อง รบกวนแจ้งเพิ่มนิดนึงครับ 📦✅",
+        "",
+        "📍 จุดคืนเป็นสถานที่เดียวกับที่จัดส่งไปไหมครับ?",
+        "",
+        "🕒 สะดวกให้ไปรับคืนช่วงเวลาไหนครับ?",
+        "",
+        "ถ้าต้องการรับค่าประกันคืนทันที จุดคืนต้องมีทีวีและ/หรือปลั๊กไฟ เพื่อให้ตรวจเช็คเครื่องก่อนคืนเงินครับ 🔒✨",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesExtensionRequest(customerText)) return "";
+
+  const english = isEnglishText(customerText);
+  const deviceName = extractDeviceName(customerText) || memory.lastDevice;
+  const days = extractRentalDays(customerText);
+
+  if (!deviceName || !deviceRates.has(deviceName)) {
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          "Which device would you like to extend?",
+          "",
+          "Please tell me the device model and how many more days you want to extend.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          "ต้องการเช่าต่อเครื่องรุ่นไหนครับ?",
+          "",
+          "แจ้งชื่อเครื่องและจำนวนวันที่ต้องการเช่าต่อได้เลยครับ 🎮✨",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  memory.lastDevice = deviceName;
+
+  if (!days) {
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          `${deviceName} extension is available 🎮✨`,
+          "",
+          "How many more days would you like to extend?",
+          "",
+          "Returning customer extension gets 10% off the rental fee. ✅",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          `${deviceName} เช่าต่อได้ครับ 🎮✨`,
+          "",
+          "ต้องการเช่าต่อเพิ่มกี่วันครับ?",
+          "",
+          "ค่าเช่าต่อจะคิดส่วนลดลูกค้าเก่า 10% จากค่าเช่าครับ ✅",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  const calc = calculateRental(deviceName, days, false, true);
+  if (!calc || calc.rentalFee == null) {
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          `${deviceName} extension starts from the shop's rental rates.`,
+          "",
+          "For this duration, admin will help confirm the best rate for you.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          `${deviceName} เช่าต่อได้ครับ`,
+          "",
+          "จำนวนวันนี้ให้แอดมินช่วยเช็คเรทราคาที่เหมาะที่สุดให้นะครับ ✅",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  const startDate = memory.lastReturnDate ? new Date(memory.lastReturnDate) : getBangkokDateObject();
+  const returnDate = addDays(startDate, days);
+  memory.lastReturnDate = returnDate.toISOString();
+  memory.lastRentalDays = days;
+
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        `${deviceName} extension for ${days} days 🎮✨`,
+        "",
+        `💰 Rental fee: ${formatMoney(calc.rentalFee, true)}`,
+        `⭐ Returning customer discount 10%: -${formatMoney(calc.discount, true)}`,
+        "",
+        `✅ Extension payment: ${formatMoney(calc.discountedRentalFee, true)}`,
+        `📅 New return date: ${formatDate(returnDate, true)}`,
+        "",
+        "🏦 Bank details",
+        "✅ Bank Acc No.: 8690576029",
+        "✅ Bank Name: Krung Thai",
+        "✅ Bank Acc Name: Somchai Hemsiri",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        `${deviceName} เช่าต่อ ${days} วันครับ 🎮✨`,
+        "",
+        `💰 ค่าเช่า: ${formatMoney(calc.rentalFee)}`,
+        `⭐ ส่วนลดลูกค้าเก่า 10%: -${formatMoney(calc.discount)}`,
+        "",
+        `✅ ยอดเช่าต่อที่ต้องชำระ: ${formatMoney(calc.discountedRentalFee)}`,
+        `📅 วันคืนใหม่: ${formatDate(returnDate)}`,
+        "",
+        "🏦 ข้อมูลโอน",
+        "✅ เลขบัญชี: 8690576029",
+        "✅ ธนาคาร: กรุงไทย",
+        "✅ ชื่อบัญชี: สมชาย เหมศิริ",
       ]
         .filter(Boolean)
         .join("\n");
@@ -662,6 +1087,11 @@ function buildAdminPauseReply(customerText, shouldGreetToday) {
 function normalizeSearchText(text) {
   return String(text || "")
     .toLowerCase()
+    .replace(/[ๆฯ]/g, "")
+    .replace(/ม๊ัย|ม๊ัยย|มั๊ย|ม้าย|ใหม|ไม๊/g, "มั้ย")
+    .replace(/เท่าไร|เท่าไรร|เท่าไหร|เท่าไหร่|เท่าไหร่ๆ/g, "เท่าไหร่")
+    .replace(/กี่บาทแล้ว|กี่บาท|ราคาเท่าไหร่|ราคาเท่าไร/g, "กี่บาท")
+    .replace(/ครัช|ครัฟ|คับ|คร่ะ|ค่ะะ|คะะ|ครับๆ/g, "")
     .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -671,9 +1101,146 @@ function compactSearchText(text) {
   return normalizeSearchText(text).replace(/[^a-z0-9ก-๙]/gi, "");
 }
 
+function includesGameplayHowToQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /ยังไง|อย่างไร|วิธีเล่น|เล่นยังไง|เล่น 2 คน|เล่น2คน|เล่นสองคน|โหมด|coop|co op|multiplayer|how to play|how do (you|i) play|gameplay|walkthrough|guide|ผ่านด่าน|บอส|cheat|โกง/.test(
+    value,
+  );
+}
+
+function buildGameplayHowToAnswer(customerText, shouldGreetToday) {
+  if (!includesGameplayHowToQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "🙏 One moment, admin will come help you shortly 😊",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "🙏 สักครู่จะมีแอดมินเข้ามาดูแลนะครับ 😊",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
 function includesGameQuestion(text) {
   const normalized = normalizeSearchText(text);
-  return /เกม|game|เล่น|มี/.test(normalized);
+  if (
+    includesBusinessRentalQuestion(text) ||
+    includesPurchaseQuestion(text) ||
+    includesLongTermRentalQuestion(text) ||
+    includesTermsQuestion(text) ||
+    includesPromotionQuestion(text) ||
+    includesAccountRentalQuestion(text) ||
+    includesGameplayHowToQuestion(text)
+  ) {
+    return false;
+  }
+
+  if (/เกม|game/.test(normalized) && /มี|ไหม|มั้ย|have|available|เช่า|rent/.test(normalized)) {
+    return true;
+  }
+
+  const candidate = buildGameSearchQuery(text);
+  const hasAvailabilityPhrase = /มี|ไหม|มั้ย|have|available/.test(normalized);
+  const hasLikelyGameToken = /[a-z0-9]{3,}/i.test(candidate) || /[\u0E00-\u0E7F]{4,}/.test(candidate);
+
+  return hasAvailabilityPhrase && hasLikelyGameToken && !extractDeviceName(text);
+}
+
+function buildGameSearchQuery(text) {
+  const platformStopwords = new Set([
+    "ps5",
+    "ps4",
+    "ps",
+    "playstation",
+    "switch",
+    "nintendo",
+    "xbox",
+    "series",
+    "meta",
+    "quest",
+    "steam",
+    "deck",
+    "rog",
+    "ally",
+    "lenovo",
+    "legion",
+    "viture",
+    "xreal",
+    "portal",
+    "vr2",
+    "pro",
+    "oled",
+    "เครื่อง",
+    "บน",
+    "ใน",
+    "เช่า",
+    "ราคา",
+    "กี่บาท",
+    "เท่าไหร่",
+    "นาม",
+    "บริษัท",
+    "ใบกำกับ",
+    "ใบเสร็จ",
+    "มี",
+    "มีเกม",
+    "เกม",
+    "เกมนี้",
+    "เกมส์",
+    "game",
+    "ไหม",
+    "ไหมครับ",
+    "ไหมค่ะ",
+    "ไหมคะ",
+    "มั้ย",
+    "มั้ยครับ",
+    "มั้ยค่ะ",
+    "มั้ยคะ",
+    "ครับ",
+    "ค่ะ",
+    "คะ",
+    "จ้า",
+    "จ๊ะ",
+    "หน่อย",
+    "เล่น",
+    "ได้",
+    "ขอ",
+    "ถาม",
+    "available",
+    "have",
+    "do",
+    "you",
+    "has",
+    "is",
+    "there",
+    "on",
+    "of",
+    "the",
+    "for",
+    "rent",
+    "rental",
+  ]);
+
+  const normalizedAliases = deviceAliases.flatMap(([, aliases]) =>
+    aliases.map((alias) => normalizeSearchText(alias)).filter(Boolean),
+  );
+
+  let normalized = normalizeSearchText(text);
+  for (const alias of normalizedAliases.sort((a, b) => b.length - a.length)) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    normalized = normalized.replace(new RegExp(`\\b${escaped}\\b`, "gi"), " ");
+  }
+
+  return normalized
+    .split(" ")
+    .filter((part) => part && !platformStopwords.has(part))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function fetchJsonWithTimeout(url, ms) {
@@ -716,48 +1283,7 @@ async function lookupGameSummary(customerText, { force = false } = {}) {
   }
 
   const gameData = await loadGameData();
-  const stopwords = new Set([
-    "มี",
-    "เกม",
-    "game",
-    "ไหม",
-    "ไหมครับ",
-    "ไหมค่ะ",
-    "ไหมคะ",
-    "มั้ย",
-    "มั้ยครับ",
-    "มั้ยค่ะ",
-    "มั้ยคะ",
-    "ครับ",
-    "ค่ะ",
-    "คะ",
-    "จ้า",
-    "จ๊ะ",
-    "หน่อย",
-    "หน่อยครับ",
-    "หน่อยค่ะ",
-    "เล่น",
-    "ได้",
-    "ใน",
-    "เครื่อง",
-    "บน",
-    "ขอ",
-    "ถาม",
-    "เช่า",
-    "available",
-    "have",
-    "do",
-    "you",
-    "has",
-    "is",
-    "there",
-    "on",
-  ]);
-  const query = normalizeSearchText(customerText)
-    .split(" ")
-    .filter((part) => !stopwords.has(part))
-    .join(" ")
-    .trim();
+  const query = buildGameSearchQuery(customerText);
 
   if (query.length < 3) {
     return "ข้อมูลเกม: ลูกค้าถามเรื่องเกม แต่ยังไม่ได้ระบุชื่อเกมชัดเจน ให้ส่งลิงก์เลือกเกมและถามชื่อเกมที่สนใจ";
@@ -863,9 +1389,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
   }
 
   if (notFound || lines.length === 0) {
-    const queried = String(customerText || "")
-      .replace(/มี|เกม|ไหม|มั้ย|ครับ|ค่ะ|คะ|game|available|do you have/gi, "")
-      .trim();
+    const queried = buildGameSearchQuery(customerText);
     return english
       ? [
           shouldGreetToday ? "Hello 🎮✨" : "",
@@ -892,11 +1416,21 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
   }
 
   const gameLines = lines.slice(0, 5).map((line) => `✅ ${line}`);
+  const thaiIntro = chooseVariant([
+    "ทางร้านมีให้บริการครับ 😊🎮✨",
+    "ทางร้านมีให้เลือกครับ 😊🎮✨",
+    "มีให้บริการในรายการของร้านครับ 🎮✨",
+  ]);
+  const englishIntro = chooseVariant([
+    "This game is available from our shop 😊🎮✨",
+    "We have this game available 😊🎮✨",
+    "This title is available in our game list 🎮✨",
+  ]);
 
   return english
     ? [
         shouldGreetToday ? "Hello 🎮✨" : "",
-        "This game is available from our shop 😊🎮✨",
+        englishIntro,
         "",
         ...gameLines,
         "",
@@ -907,12 +1441,41 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
-        "ทางร้านมีให้บริการครับ 😊🎮✨",
+        thaiIntro,
         "",
         ...gameLines,
         "",
         "สามารถเลือกเกมทั้งหมดได้ที่ลิงก์นี้เลยครับ",
         "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function buildGameLookupUnavailableAnswer(customerText, shouldGreetToday) {
+  if (!includesGameQuestion(customerText)) return "";
+
+  const english = isEnglishText(customerText);
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "I can’t check the game list automatically right now.",
+        "",
+        "You can browse and choose games here:",
+        "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+        "",
+        "Admin can also help double-check the title for you.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "ตอนนี้เช็ครายการเกมอัตโนมัติไม่สำเร็จครับ",
+        "",
+        "สามารถเลือกดูเกมทั้งหมดได้ที่ลิงก์นี้เลยครับ",
+        "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
+        "",
+        "ถ้าต้องการให้แอดมินช่วยเช็คชื่อเกมซ้ำ แจ้งได้เลยครับ 🎮✨",
       ]
         .filter(Boolean)
         .join("\n");
@@ -931,10 +1494,11 @@ function shouldUseLastGameQuery(customerText, memory) {
 
   const value = normalizeSearchText(customerText);
   const hasDevice = Boolean(extractDeviceName(customerText));
+  const asksGameFollowup = /เกม|game|เล่น|มี|ไหม|มั้ย|available|have|ล่ะ|ละ/.test(value);
   const asksPlatformFollowup =
-    /บน|เครื่อง|ใน|ps5|ps4|switch|xbox|meta|quest|playstation|nintendo|platform/.test(value);
+    asksGameFollowup && /บน|ps5|ps4|switch|xbox|meta|quest|playstation|nintendo|platform/.test(value);
 
-  return hasDevice || asksPlatformFollowup;
+  return (hasDevice && asksGameFollowup) || asksPlatformFollowup;
 }
 
 function getActivePause(sessionKey) {
@@ -947,6 +1511,49 @@ function getActivePause(sessionKey) {
   }
 
   return pause;
+}
+
+function rememberSession({ sessionKey, dialogflowSession, customerText, intentName, memory }) {
+  recentSessions.set(sessionKey, {
+    sessionKey,
+    dialogflowSession,
+    lastText: customerText,
+    lastDevice: memory?.lastDevice || "",
+    lastIntentName: intentName || "",
+    updatedAt: new Date().toISOString(),
+  });
+
+  if (recentSessions.size > 80) {
+    const oldest = [...recentSessions.entries()]
+      .sort(([, a], [, b]) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
+      .slice(0, recentSessions.size - 80);
+    for (const [key] of oldest) {
+      recentSessions.delete(key);
+    }
+  }
+}
+
+async function pauseSession({ sessionKey, customerId = "", minutes = defaultPauseMinutes, reason = "admin_takeover" }) {
+  const expiresAt = minutes > 0 ? Date.now() + minutes * 60 * 1000 : 0;
+
+  pausedSessions.set(sessionKey, {
+    expiresAt,
+    reason,
+  });
+
+  await persistPauseToWebhook({
+    sessionKey,
+    customerId: customerId || sessionKey,
+    minutes,
+    reason,
+  });
+
+  return {
+    sessionKey,
+    customerId: customerId || sessionKey,
+    reason,
+    expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+  };
 }
 
 function parseDateTime(value) {
@@ -1190,13 +1797,16 @@ async function askAI(customerText, memory, sessionContext) {
   const response = await withTimeout(
     openai.responses.create({
       model,
-      max_output_tokens: 700,
+      max_output_tokens: 900,
       instructions: [
-        "คุณเป็นแอดมินร้าน Aj เช่าเครื่องเกม ตอบสุภาพ เป็นธรรมชาติ และอ่านง่าย",
+        "คุณเป็นแอดมินร้าน Aj เช่าเครื่องเกม ฉลาด รวดเร็ว สุภาพ เป็นกันเอง อ่านง่าย",
         "ตอบเป็นภาษาเดียวกับลูกค้า ถ้าลูกค้าพิมพ์ไทยให้ตอบไทย ถ้าลูกค้าพิมพ์อังกฤษให้ตอบอังกฤษ",
-        "จัดคำตอบเป็นบรรทัดสั้น ๆ และเว้นบรรทัดระหว่างหัวข้อเสมอ",
-        "ใช้ emoji ให้ดูเป็นมิตรและชัดเจนในทุกหัวข้อ เช่น 🎮✨ 📅🕒 💰✅ 🚚⚡️ 📝📌 ⚠️",
-        "ห้ามเขียนเป็นย่อหน้ายาว ถ้ามีราคา/เงื่อนไข/ขั้นตอน ให้แยกเป็นหลายบรรทัดพร้อมเว้นบรรทัด",
+        "จัดคำตอบเป็นบรรทัดสั้น และเว้นบรรทัดเดียว (ไม่ใช่สองบรรทัด) ระหว่างหัวข้อ",
+        "ใส่ emoji ที่ชัดเจนทุกหัวข้อและทุกบุลเลต ใช้หลากหลาย เช่น 🎮✨ 📅🕒 💰✅ 🚚⚡️ 📝📌 ⚠️ 🏦💳 🔒 ⭐ 🎁 🔥 📍 🙏 ❌ 🚫 👋",
+        "ขึ้นต้นหัวข้อด้วย emoji 1-2 ตัว ตามด้วยข้อความสั้น แล้วเป็นบุลเลตที่ขึ้นต้นด้วย emoji อีกตัว",
+        "ห้ามเขียนเป็นย่อหน้ายาว ถ้ามีราคา/เงื่อนไข/ขั้นตอน ให้แยกเป็นหลายบรรทัดพร้อมเว้นบรรทัดเดียว",
+        "ถ้าลูกค้าถามหลายเรื่องในข้อความเดียว ให้ตอบแยกเป็นหัวข้อด้วย emoji หัวเรื่องต่างกัน ครบทุกคำถาม",
+        "ถ้าลูกค้าถามหลายเรื่องในข้อความเดียว เช่น ราคาและเกม ให้ตอบให้ครบทุกคำถามโดยแยกเป็นหัวข้อ",
         "รูปแบบที่ชอบ: หัวข้อ 1 บรรทัด, รายละเอียด 2-5 บรรทัด, เว้นบรรทัด, ขั้นต่อไป 1-3 บรรทัด",
         "ถ้า shouldGreetToday=true ให้เริ่มด้วยคำทักทายสั้น ๆ เช่น 'สวัสดีครับ' หรือ 'Hello' เฉพาะครั้งแรกของวันนั้น",
         "ถ้า shouldGreetToday=false ห้ามขึ้นต้นด้วยคำว่า สวัสดี/Hello อีก",
@@ -1206,7 +1816,10 @@ async function askAI(customerText, memory, sessionContext) {
         "ถ้าลูกค้าถามว่าเครื่องรุ่นใดว่างหรือไม่ ให้ใช้ข้อมูลสต็อกจาก Google Sheet ที่แนบมา",
         "ถ้าเครื่องมี Status = Available อย่างน้อย 1 เครื่อง ให้ตอบว่าว่าง แต่ถ้าลูกค้าต้องการจองตามวันที่เฉพาะ ให้แจ้งว่าจะให้แอดมินเช็คคิวและยืนยันอีกครั้ง",
         "ถ้าลูกค้าถามว่ามีเกมนี้ไหม ให้ใช้ข้อมูลเกมจาก Gist ที่แนบมา ถ้าไม่พบให้ส่งลิงก์เลือกเกมทั้งหมด",
+        "ถ้าลูกค้าถามเช่าในนามบริษัทหรือใบกำกับภาษี ห้ามตีความเป็นคำถามเกม ให้ตอบเงื่อนไขบริษัทและขอชื่อบริษัท",
         "ถ้าลูกค้าถามเลือกเกม ให้ส่งลิงก์ https://ajgamerental2021.github.io/ajconsole/game_index.html",
+        "ถ้าลูกค้าบอกว่าต้องการเช่าต่อ ให้ใช้ lastDevice จาก context ถ้ามีจำนวนวันให้คำนวณค่าเช่าต่อพร้อมส่วนลดลูกค้าเก่า 10% ถ้าไม่มีจำนวนวันให้ถามจำนวนวัน",
+        "ถ้าลูกค้าบอกว่าต้องการคืนเครื่อง ให้ถามว่าจุดคืนเป็นสถานที่เดียวกับตอนส่งไหม และสะดวกเวลาไหน",
         "การคำนวณวันคืน: ถ้าเริ่มเช่าวันที่ X จำนวน N วัน ให้วันคืน = วันที่ X + N วัน เช่น เริ่ม 1 เช่า 3 วัน คืน 4, เริ่ม 1 เช่า 7 วัน คืน 8",
         "ถ้าลูกค้าพูดว่าเริ่มวันนี้ ให้ใช้วันที่ปัจจุบันใน Asia/Bangkok จาก context",
         "ถ้าเป็นเรื่องคืนเงิน เคลม ยกเลิกออเดอร์ ต่อรองพิเศษ หรือข้อร้องเรียน ให้บอกว่าจะส่งต่อแอดมิน",
@@ -1257,6 +1870,7 @@ app.get("/debug", (_req, res) => {
     pauseSheetGid,
     pauseSheetCacheMs,
     pauseWebhookConfigured: Boolean(pauseWebhookUrl),
+    defaultPauseMinutes,
   });
 });
 
@@ -1307,31 +1921,159 @@ app.get("/admin/pause-sheet", async (req, res) => {
   }
 });
 
+app.get("/admin/recent-sessions", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const sessions = [...recentSessions.values()].sort(
+    (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+  );
+
+  if (String(req.get("accept") || "").includes("text/html")) {
+    const rows = sessions
+      .map((item) => {
+        const url = `/admin/take-action?token=${encodeURIComponent(adminToken)}&sessionKey=${encodeURIComponent(
+          item.sessionKey,
+        )}`;
+        return [
+          "<li>",
+          `<a href="${url}">Pause</a>`,
+          " ",
+          `<strong>${item.updatedAt}</strong>`,
+          " ",
+          `<code>${item.sessionKey}</code>`,
+          " ",
+          `<span>${String(item.lastText || "").replace(/[<>&]/g, "")}</span>`,
+          "</li>",
+        ].join("");
+      })
+      .join("");
+
+    return res.type("html").send(`
+      <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.5;">
+          <h1>Recent Sessions</h1>
+          <p>กด Pause เมื่อต้องการให้แอดมิน Take action เอง</p>
+          <ul>${rows || "<li>No sessions yet</li>"}</ul>
+        </body>
+      </html>
+    `);
+  }
+
+  res.json({ ok: true, sessions });
+});
+
+app.get("/admin/take-action", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const sessionKey = String(req.query.sessionKey || "").trim();
+  const minutes = Number(req.query.minutes || defaultPauseMinutes);
+  const reason = String(req.query.reason || "admin_take_action");
+
+  if (!sessionKey) {
+    const sessions = [...recentSessions.values()].sort(
+      (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+    );
+    const rows = sessions
+      .map((item) => {
+        const url = `/admin/take-action?token=${encodeURIComponent(adminToken)}&sessionKey=${encodeURIComponent(
+          item.sessionKey,
+        )}&minutes=${encodeURIComponent(minutes)}&reason=${encodeURIComponent(reason)}`;
+        return [
+          "<li>",
+          `<a href="${url}" style="font-weight:700;">Take action / Pause</a>`,
+          " ",
+          `<strong>${item.updatedAt}</strong>`,
+          " ",
+          `<code>${item.sessionKey}</code>`,
+          " ",
+          `<span>${String(item.lastText || "").replace(/[<>&]/g, "")}</span>`,
+          "</li>",
+        ].join("");
+      })
+      .join("");
+
+    return res.type("html").send(`
+      <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.5;">
+          <h1>Admin Take Action</h1>
+          <p>เลือกลูกค้าที่ต้องการให้ AI หยุดตอบทันที</p>
+          <ul>${rows || "<li>No recent sessions yet</li>"}</ul>
+        </body>
+      </html>
+    `);
+  }
+
+  const pause = await pauseSession({ sessionKey, customerId: sessionKey, minutes, reason });
+  res.type("html").send(`
+    <html>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.5;">
+        <h1>Paused</h1>
+        <p>AI paused for <code>${pause.sessionKey}</code></p>
+        <p>Reason: ${pause.reason}</p>
+        <p>Until: ${pause.expiresAt || "manual resume required"}</p>
+      </body>
+    </html>
+  `);
+});
+
 app.post("/admin/pause", (req, res) => {
   if (!requireAdmin(req, res)) return;
 
   const sessionKey = String(req.body?.sessionKey || req.query.sessionKey || "").trim();
-  const minutes = Number(req.body?.minutes || req.query.minutes || 60);
+  const customerId = String(req.body?.customerId || req.query.customerId || "").trim();
+  const minutes = Number(req.body?.minutes || req.query.minutes || defaultPauseMinutes);
   const reason = String(req.body?.reason || req.query.reason || "admin_takeover");
 
   if (!sessionKey) {
     return res.status(400).json({ ok: false, error: "sessionKey is required" });
   }
 
-  const expiresAt = minutes > 0 ? Date.now() + minutes * 60 * 1000 : 0;
-  pausedSessions.set(sessionKey, { expiresAt, reason });
-  persistPauseToWebhook({
-    sessionKey,
-    customerId: sessionKey,
-    minutes,
-    reason,
-  });
-  res.json({
-    ok: true,
-    sessionKey,
-    reason,
-    expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-  });
+  pauseSession({ sessionKey, customerId, minutes, reason })
+    .then((pause) => res.json({ ok: true, ...pause }))
+    .catch((error) => {
+      console.error("Pause failed:", error);
+      res.status(500).json({ ok: false, error: "Pause failed" });
+    });
+});
+
+app.post("/admin/take-action", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const sessionKey = String(req.body?.sessionKey || req.query.sessionKey || "").trim();
+  const customerId = String(req.body?.customerId || req.query.customerId || "").trim();
+  const minutes = Number(req.body?.minutes || req.query.minutes || defaultPauseMinutes);
+  const reason = String(req.body?.reason || req.query.reason || "admin_take_action");
+
+  if (!sessionKey) {
+    return res.status(400).json({ ok: false, error: "sessionKey is required" });
+  }
+
+  pauseSession({ sessionKey, customerId, minutes, reason })
+    .then((pause) => res.json({ ok: true, ...pause }))
+    .catch((error) => {
+      console.error("Take action pause failed:", error);
+      res.status(500).json({ ok: false, error: "Take action pause failed" });
+    });
+});
+
+app.post("/admin/admin-reply", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const sessionKey = String(req.body?.sessionKey || req.query.sessionKey || "").trim();
+  const customerId = String(req.body?.customerId || req.query.customerId || "").trim();
+  const minutes = Number(req.body?.minutes || req.query.minutes || defaultPauseMinutes);
+  const reason = String(req.body?.reason || req.query.reason || "admin_reply_detected");
+
+  if (!sessionKey) {
+    return res.status(400).json({ ok: false, error: "sessionKey is required" });
+  }
+
+  pauseSession({ sessionKey, customerId, minutes, reason })
+    .then((pause) => res.json({ ok: true, ...pause }))
+    .catch((error) => {
+      console.error("Admin-reply pause failed:", error);
+      res.status(500).json({ ok: false, error: "Admin-reply pause failed" });
+    });
 });
 
 app.post("/admin/resume", (req, res) => {
@@ -1371,6 +2113,14 @@ app.post("/dialogflow-webhook", async (req, res) => {
     dialogflowSession,
     lastDevice: memory.lastDevice,
     shouldGreetToday,
+  });
+
+  rememberSession({
+    sessionKey,
+    dialogflowSession,
+    customerText,
+    intentName,
+    memory,
   });
 
   if (includesAdminRequest(customerText)) {
@@ -1433,35 +2183,123 @@ app.post("/dialogflow-webhook", async (req, res) => {
   }
 
   try {
-    const promotionAnswer = buildPromotionAnswer(customerText, shouldGreetToday);
+    const answerBlocks = [];
+    const shouldGreetForNextBlock = () => shouldGreetToday && answerBlocks.length === 0;
+
+    const promotionAnswer = buildPromotionAnswer(customerText, shouldGreetForNextBlock());
     if (promotionAnswer) {
-      memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, promotionAnswer);
-      return res.json(dialogflowText(promotionAnswer));
+      answerBlocks.push(promotionAnswer);
     }
 
-    const deterministicAnswer = buildPriceAnswer(customerText, memory, shouldGreetToday);
-    if (deterministicAnswer) {
+    const gameplayHowToAnswer = buildGameplayHowToAnswer(customerText, shouldGreetForNextBlock());
+    if (gameplayHowToAnswer) {
+      answerBlocks.push(gameplayHowToAnswer);
+      const minutes = 120;
+      pausedSessions.set(sessionKey, {
+        expiresAt: Date.now() + minutes * 60 * 1000,
+        reason: "gameplay_howto_handoff",
+      });
+      await persistPauseToWebhook({
+        sessionKey,
+        customerId: sessionKey,
+        minutes,
+        reason: "gameplay_howto_handoff",
+      });
+      const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, deterministicAnswer);
-      return res.json(dialogflowText(deterministicAnswer));
+      updateRecentMessages(memory, customerText, answer);
+      return res.json(dialogflowText(answer));
     }
 
-    const gameLookupText = shouldUseLastGameQuery(customerText, memory)
-      ? memory.lastGameQuery
-      : customerText;
-    const gameSummary = await lookupGameSummary(gameLookupText, {
-      force: shouldUseLastGameQuery(customerText, memory),
-    });
-    const gameAnswer = buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday);
-    if (gameAnswer) {
-      const extractedGame = extractGameQueryFromSummary(gameSummary);
-      if (extractedGame) {
-        memory.lastGameQuery = extractedGame;
+    const accountAnswer = buildAccountRentalAnswer(customerText, shouldGreetForNextBlock());
+    if (accountAnswer) {
+      answerBlocks.push(accountAnswer);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer);
+      return res.json(dialogflowText(answer));
+    }
+
+    const ambiguousToken = detectAmbiguousDevice(customerText);
+    if (
+      ambiguousToken &&
+      !memory.lastDevice &&
+      (includesPriceQuestion(customerText, memory) ||
+        includesLongTermRentalQuestion(customerText) ||
+        /เช่า|rent/i.test(customerText))
+    ) {
+      answerBlocks.push(
+        buildAmbiguousDeviceAnswer(ambiguousToken, isEnglishText(customerText), shouldGreetForNextBlock()),
+      );
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer);
+      return res.json(dialogflowText(answer));
+    }
+
+    const businessAnswer = buildBusinessRentalAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (businessAnswer) {
+      answerBlocks.push(businessAnswer);
+    }
+
+    const termsAnswer = buildTermsAnswer(customerText, shouldGreetForNextBlock());
+    if (termsAnswer) {
+      answerBlocks.push(termsAnswer);
+    }
+
+    if (!businessAnswer) {
+      const longTermAnswer = buildLongTermRentalAnswer(customerText, memory, shouldGreetForNextBlock());
+      if (longTermAnswer) {
+        answerBlocks.push(longTermAnswer);
       }
+
+      const returnAnswer = buildReturnAnswer(customerText, shouldGreetForNextBlock());
+      if (returnAnswer) {
+        answerBlocks.push(returnAnswer);
+      }
+
+      const extensionAnswer = buildExtensionAnswer(customerText, memory, shouldGreetForNextBlock());
+      if (extensionAnswer) {
+        answerBlocks.push(extensionAnswer);
+      }
+
+      if (!longTermAnswer && !returnAnswer && !extensionAnswer) {
+        const priceAnswer = buildPriceAnswer(customerText, memory, shouldGreetForNextBlock());
+        if (priceAnswer) {
+          answerBlocks.push(priceAnswer);
+        }
+      }
+
+      if (!longTermAnswer && !returnAnswer && !extensionAnswer) {
+        const useLastGameQuery = shouldUseLastGameQuery(customerText, memory);
+        const gameLookupText = useLastGameQuery ? memory.lastGameQuery : customerText;
+        try {
+          const gameSummary = await lookupGameSummary(gameLookupText, {
+            force: useLastGameQuery,
+          });
+          const gameAnswer = buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetForNextBlock());
+          if (gameAnswer) {
+            const extractedGame = extractGameQueryFromSummary(gameSummary);
+            if (extractedGame) {
+              memory.lastGameQuery = extractedGame;
+            }
+            answerBlocks.push(gameAnswer);
+          }
+        } catch (error) {
+          console.error("Game lookup failed:", error);
+          const gameErrorAnswer = buildGameLookupUnavailableAnswer(customerText, shouldGreetForNextBlock());
+          if (gameErrorAnswer) {
+            answerBlocks.push(gameErrorAnswer);
+          }
+        }
+      }
+    }
+
+    if (answerBlocks.length > 0) {
+      const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, gameAnswer);
-      return res.json(dialogflowText(gameAnswer));
+      updateRecentMessages(memory, customerText, answer);
+      return res.json(dialogflowText(answer));
     }
 
     if (!isFallbackIntent(intentName) && queryResult.fulfillmentText) {

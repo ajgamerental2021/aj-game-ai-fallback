@@ -43,7 +43,7 @@ git push -u origin main
    - Start Command: `npm start`
 6. เพิ่ม Environment Variables:
    - `OPENAI_API_KEY` = API key ของคุณ
-   - `OPENAI_MODEL` = `gpt-4o-mini`
+   - `OPENAI_MODEL` = `gpt-4o` (default ใหม่ ฉลาดขึ้น ถ้าอยากประหยัดใช้ `gpt-4o-mini`)
    - `AI_TIMEOUT_MS` = `3500`
    - `INVENTORY_SHEET_ID` = `13QZWpd_E-L_0G_Xd0zSL5_OcgV4sdwk9febXZSkZepc`
    - `INVENTORY_GID` = `1879984026`
@@ -87,7 +87,7 @@ https://your-service-name.onrender.com/inventory
 https://your-service-name.onrender.com/debug
 ```
 
-ควรเห็น `hasOpenAIKey: true` และ `model: "gpt-4o-mini"`
+ควรเห็น `hasOpenAIKey: true` และ `model: "gpt-4o"`
 
 เช็คเกมจาก Gist ได้ที่:
 
@@ -219,6 +219,7 @@ Human Handoff
 ```text
 ADMIN_TOKEN=ตั้งรหัสลับยาวๆเอง
 PAUSED_REPLY_TEXT=
+DEFAULT_PAUSE_MINUTES=720
 ```
 
 ### ตั้ง Google Sheet Pause
@@ -290,6 +291,35 @@ PAUSE_WEBHOOK_URL=https://script.google.com/macros/s/xxxxx/exec
 Dialogflow webhook: { sessionKey: "...", ... }
 ```
 
+### วิธีใช้ง่ายสุดสำหรับ Admin Take Action
+
+เปิดลิงก์นี้ใน browser แล้ว bookmark ไว้:
+
+```text
+https://your-service-name.onrender.com/admin/take-action?token=YOUR_ADMIN_TOKEN
+```
+
+เมื่อลูกค้าทักเข้ามา server จะจำ session ล่าสุดไว้ให้ในหน้านี้
+
+ถ้าแอดมินต้องการคุยเอง:
+
+1. เปิดลิงก์ `Admin Take Action`
+2. กด `Take action / Pause` ที่ลูกค้าคนนั้น
+3. AI จะหยุดตอบลูกค้าคนนั้นทันทีตามเวลาที่ตั้งใน `DEFAULT_PAUSE_MINUTES`
+4. ถ้าตั้ง `PAUSE_WEBHOOK_URL` แล้ว ระบบจะบันทึก pause ลง Google Sheet ด้วย
+
+ข้อจำกัดสำคัญ:
+
+- LINE OA / Dialogflow webhook ไม่ส่งข้อความที่แอดมินพิมพ์ออกไปหา server
+- ดังนั้น server จะไม่รู้เองว่าแอดมินกดตอบในแอป LINE OA แล้ว
+- วิธีที่ใช้งานได้จริงคือต้องกด `Take action / Pause` ก่อนหรือทันทีที่แอดมินเริ่มคุย
+
+ดู session ล่าสุดแบบ JSON:
+
+```text
+https://your-service-name.onrender.com/admin/recent-sessions?token=YOUR_ADMIN_TOKEN
+```
+
 สั่ง pause 60 นาที:
 
 ```bash
@@ -321,6 +351,45 @@ curl -X POST "https://your-service-name.onrender.com/admin/resume" \
 PAUSED_REPLY_TEXT=แอดมินกำลังเข้ามาดูแลให้นะครับ
 ```
 
+### Auto Pause ทันทีตอนแอดมินตอบใน LINE OA (ใหม่)
+
+เพิ่ม endpoint:
+
+```text
+POST https://your-service-name.onrender.com/admin/admin-reply
+```
+
+ใช้สำหรับให้ระบบภายนอก (Make.com / Apps Script / LINE Webhook Relay) เรียกเข้ามาทุกครั้งที่ตรวจจับว่าแอดมินพิมพ์ตอบลูกค้าใน LINE OA → AI จะ pause ลูกค้ารายนั้นทันที (default `DEFAULT_PAUSE_MINUTES` = 720 นาที = 12 ชม.)
+
+ตัวอย่าง payload:
+
+```json
+{
+  "sessionKey": "LINE_USER_ID_ของลูกค้า",
+  "customerId": "LINE_USER_ID_ของลูกค้า",
+  "minutes": 720,
+  "reason": "admin_reply_detected"
+}
+```
+
+Header ที่ต้องส่ง: `x-admin-token: YOUR_ADMIN_TOKEN`
+
+ในไฟล์ `google-apps-script-pause.gs` มี helper `pauseFromAdminReply(sessionKey, customerId)` ให้เรียกใช้จาก Apps Script trigger ของ LINE OA Manager หรือ Make.com flow
+
+ตั้งค่าใน Apps Script:
+
+```js
+const RENDER_BASE_URL = "https://your-render-service.onrender.com";
+```
+
+วิธีต่อกับ LINE OA จริง (เลือก 1 ใน 3):
+
+1. **LINE Messaging API webhook** — ถ้าใช้ LINE Messaging API ตรง ๆ ให้ relay เหตุการณ์ที่ source.type = `user` แต่ message.sentBy เป็น admin/operator → ยิงเข้า `/admin/admin-reply`
+2. **Make.com / Zapier** — สร้าง scenario: trigger `LINE - Watch Operator Messages` → action `HTTP POST` ไปที่ `/admin/admin-reply`
+3. **Apps Script Time Trigger** — ดึง Chat History API ของ LINE OA Manager (ถ้าเข้าถึงได้) ทุก 1 นาที แล้วเรียก `pauseFromAdminReply()` เมื่อเจอ outgoing message ที่ไม่ใช่จาก bot
+
+ข้อจำกัด: LINE OA Manager Web UI ไม่มี webhook อย่างเป็นทางการสำหรับ outgoing admin message ต้องใช้ Messaging API หรือ third-party relay
+
 ### Auto Pause จากคำว่าแอดมิน/คนจริง
 
 ถ้าลูกค้าพิมพ์ข้อความที่มีคำประมาณนี้:
@@ -342,3 +411,64 @@ agent
 ```
 
 แล้ว pause AI ของลูกค้าคนนั้นทันทีประมาณ 120 นาที
+
+## 10. สรุปอัพเดทล่าสุด
+
+### Stack ปัจจุบัน
+
+- **Render Web Service** = endpoint webhook (`/dialogflow-webhook`, `/admin/*`)
+- **GitHub** = source code repo, Render auto-deploy ตอน push main
+- **Google Sheet** = inventory + pause status
+- **Gist** = ข้อมูลเกม (`ajgame-data.json`)
+- **Google Apps Script** = บันทึก pause ลงชีต + relay admin-reply event
+- **Dialogflow ES** = NLU จับ intent + ส่ง fallback มา webhook
+- **LINE OA** = ช่องทางคุยกับลูกค้า
+
+### ฟีเจอร์ที่เพิ่ม/แก้
+
+- **AI model default `gpt-4o`** ฉลาดขึ้น (เปลี่ยน env `OPENAI_MODEL` ได้)
+- **จับ keyword ได้ดีขึ้น** — normalize รูปแปร `มั๊ย/ม้าย/ใหม`, `เท่าไร/เท่าไหร่`, ตัด `ครัช/คับ/ๆ`
+- **Alias เครื่องใหม่** — `xbox x`, `xbox sx`, `xbox s`, `xbox ss`, `ps 5`, `เพลย์สเตชั่น 5`, `psportal`, `วีอาร์2` ฯลฯ
+- **Ambiguous device handler** — พิมพ์ `xbox` เปล่า ๆ จะถามว่า Series X หรือ S พร้อมเรทเทียบ
+- **เช่าไอดีเกม PS5** — จับคำ `ไอดี/account/psn` แยกออกจากเช่าเครื่อง ส่งลิงก์ `ajgameid`
+- **เช่ารายเดือน** — จับ `หลายเดือน/รายเดือน/เดือน` ไม่ปนกับ game lookup
+- **เงื่อนไข/ข้อกำหนด** — มี `buildTermsAnswer` block ตอบเงื่อนไขเช่าโดยตรง
+- **สรุปอัตโนมัติ** — เมื่อลูกค้าให้ทั้งจำนวนวัน + วันเริ่ม → ตอบยอดรวม + วันเริ่ม/วันคืน + เลขบัญชี + ลิงก์สัญญา ทันที (Thai/English ตามภาษาลูกค้า)
+- **Memory ข้ามข้อความ** — `lastDevice`, `lastRentalDays`, `lastStartDate` ใช้ต่อกรณีลูกค้าทยอยส่งข้อมูล
+- **Layout/Emoji** — ตัด blank line ซ้อน, ใส่ emoji หลากหลายทุกหัวข้อ
+- **Endpoint ใหม่** `/admin/admin-reply` สำหรับ auto-pause ตอนแอดมินตอบ
+
+## 11. ทำอะไรต่อให้ใช้งานได้จริง (Checklist)
+
+1. **Push code ใหม่ขึ้น GitHub**
+   ```bash
+   git add server.js google-apps-script-pause.gs README_TH.md knowledge-base.md
+   git commit -m "Smart keyword matching, account rental, auto-pause endpoint"
+   git push origin main
+   ```
+2. **Render auto-deploy** — รอ build เสร็จ ~2 นาที
+3. **ตั้ง env ใหม่บน Render** (ถ้าอยากใช้ `gpt-4o`)
+   - แก้ `OPENAI_MODEL` = `gpt-4o`
+   - กด `Manual Deploy` → `Clear cache & deploy` ถ้าจำเป็น
+4. **ตรวจ health**
+   - เปิด `https://your-service-name.onrender.com/` → `ok: true`
+   - เปิด `https://your-service-name.onrender.com/debug` → `model: "gpt-4o"`
+5. **อัพเดท Google Apps Script**
+   - เปิด Sheet `AI Pause` → Extensions → Apps Script
+   - แทนที่โค้ดด้วย `google-apps-script-pause.gs` ใหม่
+   - แก้ `RENDER_BASE_URL` ให้ตรงกับ Render URL จริง
+   - แก้ `ADMIN_TOKEN` ให้ตรงกับ env Render
+   - กด `Deploy` → `Manage deployments` → แก้ version ปัจจุบัน → `Deploy`
+6. **เชื่อม Auto-pause กับ LINE OA** (เลือก 1)
+   - **ง่ายสุด**: ใช้ Make.com — Trigger `LINE OA - New Message from Operator` → HTTP POST → `/admin/admin-reply` พร้อม header `x-admin-token`
+   - หรือใช้ Messaging API webhook ที่ relay event admin → server
+7. **ทดสอบลูกค้าจำลอง**
+   - ทัก `เช่าไอดี PS5` → ต้องได้ลิงก์ `ajgameid`
+   - ทัก `เช่า xbox เท่าไหร่` → ต้องถาม Series X/S พร้อมเรท
+   - ทัก `xbox x เช่า 4 วัน เริ่มพรุ่งนี้` → ต้องสรุปยอด + วันคืน + เลขบัญชี
+   - ทัก `มีเช่าหลายเดือนมั้ย` → ต้องตอบเรทรายเดือน
+   - ให้แอดมินตอบใน LINE OA → AI ต้อง pause ลูกค้าคนนั้นทันที (เช็ค Sheet `AI Pause`)
+8. **Monitor**
+   - ดู Render Logs หา error
+   - ดู Sheet `AI Pause` ว่าเก็บ event ถูก
+9. **(Optional) Tune knowledge-base.md** ถ้าเจอคำถามที่ AI ยังตอบไม่ดี — เพิ่ม FAQ ในไฟล์แล้ว push อีกรอบ
