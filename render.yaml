@@ -10,15 +10,17 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
-        value: gpt-5.2
+        value: gpt-4o-mini
       - key: AI_TIMEOUT_MS
-        value: "4200"
+        value: "3500"
       - key: INVENTORY_SHEET_ID
         value: 13QZWpd_E-L_0G_Xd0zSL5_OcgV4sdwk9febXZSkZepc
       - key: INVENTORY_GID
         value: "1879984026"
       - key: INVENTORY_CACHE_MS
         value: "60000"
+      - key: INVENTORY_FETCH_TIMEOUT_MS
+        value: "3000"
   - type: cron
     name: line-dialogflow-ai-fallback-ping
     env: node

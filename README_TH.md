@@ -43,11 +43,12 @@ git push -u origin main
    - Start Command: `npm start`
 6. เพิ่ม Environment Variables:
    - `OPENAI_API_KEY` = API key ของคุณ
-   - `OPENAI_MODEL` = `gpt-5.2`
-   - `AI_TIMEOUT_MS` = `4200`
+   - `OPENAI_MODEL` = `gpt-4o-mini`
+   - `AI_TIMEOUT_MS` = `3500`
    - `INVENTORY_SHEET_ID` = `13QZWpd_E-L_0G_Xd0zSL5_OcgV4sdwk9febXZSkZepc`
    - `INVENTORY_GID` = `1879984026`
    - `INVENTORY_CACHE_MS` = `60000`
+   - `INVENTORY_FETCH_TIMEOUT_MS` = `3000`
 7. กด Deploy
 
 หลัง deploy เสร็จ Render จะให้ URL ประมาณนี้:
@@ -69,6 +70,14 @@ https://your-service-name.onrender.com/inventory
 ```
 
 ระบบจะอ่าน worksheet `Inventory` จาก Google Sheet โดยใช้คอลัมน์ `Device Name` และ `Status` ถ้า Device Name เดียวกันมีหลายแถว และมีแถวใดแถวหนึ่งเป็น `Available` จะถือว่าเครื่องรุ่นนั้นว่าง
+
+เช็ค config แบบไม่เปิดเผย API key ได้ที่:
+
+```text
+https://your-service-name.onrender.com/debug
+```
+
+ควรเห็น `hasOpenAIKey: true` และ `model: "gpt-4o-mini"`
 
 ## 4. ตั้งค่า Dialogflow ES
 

@@ -8,15 +8,16 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY || "missing-openai-api-key",
 });
 
-const model = process.env.OPENAI_MODEL || "gpt-5.2";
-const aiTimeoutMs = Number(process.env.AI_TIMEOUT_MS || 4200);
+const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const aiTimeoutMs = Number(process.env.AI_TIMEOUT_MS || 3500);
 const inventorySheetId =
   process.env.INVENTORY_SHEET_ID || "13QZWpd_E-L_0G_Xd0zSL5_OcgV4sdwk9febXZSkZepc";
 const inventoryGid = process.env.INVENTORY_GID || "1879984026";
 const inventoryCacheMs = Number(process.env.INVENTORY_CACHE_MS || 60000);
+const inventoryFetchTimeoutMs = Number(process.env.INVENTORY_FETCH_TIMEOUT_MS || 3000);
 
 let knowledgeBase = "";
 let inventoryCache = {
@@ -57,7 +58,10 @@ async function loadInventorySummary() {
   }
 
   const url = `https://docs.google.com/spreadsheets/d/${inventorySheetId}/export?format=csv&gid=${inventoryGid}`;
-  const response = await fetch(url);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), inventoryFetchTimeoutMs);
+  const response = await fetch(url, { signal: controller.signal });
+  clearTimeout(timeoutId);
 
   if (!response.ok) {
     throw new Error(`Inventory sheet fetch failed: ${response.status}`);
@@ -138,6 +142,10 @@ async function withTimeout(promise, ms) {
 }
 
 async function askAI(customerText) {
+  if (!process.env.OPENAI_API_KEY) {
+    return "ขออภัยค่ะ ขอส่งต่อให้แอดมินช่วยตรวจสอบให้นะคะ";
+  }
+
   let inventorySummary = "";
 
   try {
@@ -151,6 +159,7 @@ async function askAI(customerText) {
   const response = await withTimeout(
     openai.responses.create({
       model,
+      max_output_tokens: 350,
       instructions: [
         "คุณเป็นแอดมินร้านค้า ตอบเป็นภาษาไทย สุภาพ กระชับ และเป็นธรรมชาติ",
         "ตอบจากข้อมูลร้านที่ให้มาเท่านั้น ห้ามแต่งราคา สต็อก โปรโมชัน หรือเงื่อนไขเอง",
@@ -181,6 +190,19 @@ app.get("/", (_req, res) => {
   });
 });
 
+app.get("/debug", (_req, res) => {
+  res.json({
+    ok: true,
+    model,
+    hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
+    aiTimeoutMs,
+    inventorySheetId,
+    inventoryGid,
+    inventoryCacheMs,
+    inventoryFetchTimeoutMs,
+  });
+});
+
 app.get("/inventory", async (_req, res) => {
   try {
     const summary = await loadInventorySummary();
@@ -195,6 +217,12 @@ app.post("/dialogflow-webhook", async (req, res) => {
   const queryResult = req.body?.queryResult || {};
   const customerText = queryResult.queryText || "";
   const intentName = queryResult.intent?.displayName || "";
+
+  console.log("Dialogflow webhook:", {
+    intentName,
+    text: customerText,
+    isFallback: isFallbackIntent(intentName),
+  });
 
   if (!isFallbackIntent(intentName)) {
     return res.json(dialogflowText(queryResult.fulfillmentText || "รับทราบค่ะ"));
