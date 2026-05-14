@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: line-dialogflow-ai-fallback
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.2
+      - key: AI_TIMEOUT_MS
+        value: "4200"
+      - key: INVENTORY_SHEET_ID
+        value: 13QZWpd_E-L_0G_Xd0zSL5_OcgV4sdwk9febXZSkZepc
+      - key: INVENTORY_GID
+        value: "1879984026"
+      - key: INVENTORY_CACHE_MS
+        value: "60000"
