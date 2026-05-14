@@ -24,6 +24,29 @@ let inventoryCache = {
   expiresAt: 0,
   summary: "",
 };
+const conversationMemory = new Map();
+
+const deviceAliases = [
+  ["Lenovo Legion GO2", ["lenovo legion go2", "legion go2", "go2"]],
+  ["ROG XBOX Ally X", ["rog xbox ally x", "rog ally x", "ally x", "rog"]],
+  ["Nintendo Switch 2", ["nintendo switch 2", "switch 2", "ns2", "n2"]],
+  ["Nintendo Switch 1", ["nintendo switch 1", "switch 1", "switch"]],
+  ["Steam Deck OLED", ["steam deck oled", "steam deck", "steam"]],
+  ["Xbox Series X", ["xbox series x", "series x"]],
+  ["Xbox Series S", ["xbox series s", "series s"]],
+  ["Meta Quest 3s", ["meta quest 3s", "quest 3s", "mq3s"]],
+  ["Meta Quest 3", ["meta quest 3", "quest 3", "mq3"]],
+  ["Viture Beast", ["viture beast", "beast"]],
+  ["Viture Luma Ultra", ["viture luma ultra", "luma ultra"]],
+  ["Viture Luma Pro", ["viture luma pro", "luma pro"]],
+  ["XREAL One", ["xreal one", "xreal"]],
+  ["Logitech G29", ["logitech g29", "g29"]],
+  ["PS5 Pro", ["ps5 pro", "playstation 5 pro", "เพลย์ 5 pro", "เพลย์5 pro"]],
+  ["PS Portal", ["ps portal", "portal"]],
+  ["PS VR2", ["ps vr2", "psvr2", "vr2"]],
+  ["PS5", ["ps5", "playstation 5", "เพลย์ 5", "เพลย์5"]],
+  ["PS4", ["ps4", "playstation 4", "เพลย์ 4", "เพลย์4"]],
+];
 
 async function loadKnowledgeBase() {
   knowledgeBase = await fs.readFile(new URL("./knowledge-base.md", import.meta.url), "utf8");
@@ -49,6 +72,65 @@ function clipForChat(text) {
   const clean = String(text || "").replace(/\s+\n/g, "\n").trim();
   if (!clean) return "ขอส่งต่อให้แอดมินช่วยตรวจสอบให้นะคะ";
   return clean.length > 900 ? `${clean.slice(0, 897)}...` : clean;
+}
+
+function getBangkokDateParts() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+  })
+    .formatToParts(new Date())
+    .reduce((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+
+  return {
+    dateKey: `${parts.year}-${parts.month}-${parts.day}`,
+    display: `${parts.day}/${parts.month}/${parts.year}`,
+    weekday: parts.weekday,
+  };
+}
+
+function getSessionKey(req) {
+  return (
+    req.body?.session ||
+    req.body?.originalDetectIntentRequest?.payload?.data?.source?.userId ||
+    req.body?.originalDetectIntentRequest?.payload?.source?.userId ||
+    "anonymous"
+  );
+}
+
+function getMemory(sessionKey) {
+  if (!conversationMemory.has(sessionKey)) {
+    conversationMemory.set(sessionKey, {
+      greetedDate: "",
+      lastDevice: "",
+      lastMessages: [],
+    });
+  }
+
+  return conversationMemory.get(sessionKey);
+}
+
+function extractDeviceName(text) {
+  const normalized = String(text || "").toLowerCase();
+
+  for (const [deviceName, aliases] of deviceAliases) {
+    if (aliases.some((alias) => normalized.includes(alias.toLowerCase()))) {
+      return deviceName;
+    }
+  }
+
+  return "";
+}
+
+function updateRecentMessages(memory, customerText, answer = "") {
+  memory.lastMessages.push({ customerText, answer });
+  memory.lastMessages = memory.lastMessages.slice(-4);
 }
 
 async function loadInventorySummary() {
@@ -141,7 +223,7 @@ async function withTimeout(promise, ms) {
   }
 }
 
-async function askAI(customerText) {
+async function askAI(customerText, memory, sessionContext) {
   if (!process.env.OPENAI_API_KEY) {
     return "ขออภัยค่ะ ขอส่งต่อให้แอดมินช่วยตรวจสอบให้นะคะ";
   }
@@ -159,20 +241,33 @@ async function askAI(customerText) {
   const response = await withTimeout(
     openai.responses.create({
       model,
-      max_output_tokens: 350,
+      max_output_tokens: 520,
       instructions: [
-        "คุณเป็นแอดมินร้านค้า ตอบเป็นภาษาไทย สุภาพ กระชับ และเป็นธรรมชาติ",
+        "คุณเป็นแอดมินร้าน Aj เช่าเครื่องเกม ตอบสุภาพ เป็นธรรมชาติ และอ่านง่าย",
+        "ตอบเป็นภาษาเดียวกับลูกค้า ถ้าลูกค้าพิมพ์ไทยให้ตอบไทย ถ้าลูกค้าพิมพ์อังกฤษให้ตอบอังกฤษ",
+        "จัดคำตอบเป็นบรรทัดสั้น ๆ ใช้ emoji ที่เกี่ยวข้องพอดี ๆ เช่น 🎮 📅 💰 🚚 ✅ ⚠️",
+        "ห้ามเขียนเป็นย่อหน้ายาว ถ้ามีราคา/เงื่อนไขให้แยกบรรทัดให้อ่านง่าย",
+        "ถ้า shouldGreetToday=true ให้เริ่มด้วยคำทักทายสั้น ๆ เช่น 'สวัสดีครับ' หรือ 'Hello' เฉพาะครั้งแรกของวันนั้น",
+        "ถ้า shouldGreetToday=false ห้ามขึ้นต้นด้วยคำว่า สวัสดี/Hello อีก",
         "ตอบจากข้อมูลร้านที่ให้มาเท่านั้น ห้ามแต่งราคา สต็อก โปรโมชัน หรือเงื่อนไขเอง",
         "ถ้าข้อมูลไม่พอ ให้ถามกลับ 1 คำถามที่จำเป็นที่สุด",
+        "ถ้าลูกค้าถามต่อโดยไม่ระบุชื่อเครื่อง ให้ใช้ lastDevice จาก context ก่อนหน้าเป็นเครื่องที่กำลังคุยอยู่",
         "ถ้าลูกค้าถามว่าเครื่องรุ่นใดว่างหรือไม่ ให้ใช้ข้อมูลสต็อกจาก Google Sheet ที่แนบมา",
         "ถ้าเครื่องมี Status = Available อย่างน้อย 1 เครื่อง ให้ตอบว่าว่าง แต่ถ้าลูกค้าต้องการจองตามวันที่เฉพาะ ให้แจ้งว่าจะให้แอดมินเช็คคิวและยืนยันอีกครั้ง",
+        "การคำนวณวันคืน: ถ้าเริ่มเช่าวันที่ X จำนวน N วัน ให้วันคืน = วันที่ X + N วัน เช่น เริ่ม 1 เช่า 3 วัน คืน 4, เริ่ม 1 เช่า 7 วัน คืน 8",
+        "ถ้าลูกค้าพูดว่าเริ่มวันนี้ ให้ใช้วันที่ปัจจุบันใน Asia/Bangkok จาก context",
         "ถ้าเป็นเรื่องคืนเงิน เคลม ยกเลิกออเดอร์ ต่อรองพิเศษ หรือข้อร้องเรียน ให้บอกว่าจะส่งต่อแอดมิน",
         "ห้ามพูดถึงว่าเป็น AI หรือระบบอัตโนมัติ เว้นแต่ลูกค้าถามตรง ๆ",
       ].join("\n"),
       input: [
         {
           role: "user",
-          content: `ข้อมูลร้าน:\n${knowledgeBase}\n\n${inventorySummary}\n\nข้อความลูกค้า:\n${customerText}`,
+          content: [
+            `ข้อมูลร้าน:\n${knowledgeBase}`,
+            inventorySummary,
+            `บริบทสนทนา:\n${sessionContext}`,
+            `ข้อความลูกค้า:\n${customerText}`,
+          ].join("\n\n"),
         },
       ],
     }),
@@ -217,11 +312,24 @@ app.post("/dialogflow-webhook", async (req, res) => {
   const queryResult = req.body?.queryResult || {};
   const customerText = queryResult.queryText || "";
   const intentName = queryResult.intent?.displayName || "";
+  const sessionKey = getSessionKey(req);
+  const memory = getMemory(sessionKey);
+  const today = getBangkokDateParts();
+  const detectedDevice = extractDeviceName(customerText);
+
+  if (detectedDevice) {
+    memory.lastDevice = detectedDevice;
+  }
+
+  const shouldGreetToday = memory.greetedDate !== today.dateKey;
 
   console.log("Dialogflow webhook:", {
     intentName,
     text: customerText,
     isFallback: isFallbackIntent(intentName),
+    sessionKey,
+    lastDevice: memory.lastDevice,
+    shouldGreetToday,
   });
 
   if (!isFallbackIntent(intentName)) {
@@ -233,7 +341,17 @@ app.post("/dialogflow-webhook", async (req, res) => {
   }
 
   try {
-    const answer = await askAI(customerText);
+    const sessionContext = [
+      `todayDateBangkok=${today.display}`,
+      `todayWeekday=${today.weekday}`,
+      `shouldGreetToday=${shouldGreetToday}`,
+      `lastDevice=${memory.lastDevice || "none"}`,
+      `recentMessages=${JSON.stringify(memory.lastMessages)}`,
+    ].join("\n");
+
+    const answer = await askAI(customerText, memory, sessionContext);
+    memory.greetedDate = today.dateKey;
+    updateRecentMessages(memory, customerText, answer);
     return res.json(dialogflowText(answer));
   } catch (error) {
     console.error("AI fallback failed:", error);
