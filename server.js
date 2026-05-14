@@ -3,6 +3,15 @@ import express from "express";
 import fs from "node:fs/promises";
 import { parse } from "csv-parse/sync";
 import OpenAI from "openai";
+import { Redis } from "@upstash/redis";
+
+const redis = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+  ? new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    })
+  : null;
+const memoryTtlSeconds = Number(process.env.MEMORY_TTL_SECONDS || 7 * 24 * 60 * 60);
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -176,12 +185,45 @@ function getMemory(sessionKey) {
       lastDevice: "",
       lastGameQuery: "",
       lastReturnDate: "",
+      lastStartDate: "",
       lastRentalDays: null,
       lastMessages: [],
     });
   }
 
   return conversationMemory.get(sessionKey);
+}
+
+async function hydrateMemoryFromRedis(sessionKey) {
+  if (!redis || !sessionKey) return;
+  if (conversationMemory.has(sessionKey)) return;
+  try {
+    const data = await redis.get(`mem:${sessionKey}`);
+    if (data && typeof data === "object") {
+      conversationMemory.set(sessionKey, {
+        greetedDate: data.greetedDate || "",
+        lastDevice: data.lastDevice || "",
+        lastGameQuery: data.lastGameQuery || "",
+        lastReturnDate: data.lastReturnDate || "",
+        lastStartDate: data.lastStartDate || "",
+        lastRentalDays: data.lastRentalDays ?? null,
+        lastMessages: Array.isArray(data.lastMessages) ? data.lastMessages : [],
+      });
+    }
+  } catch (error) {
+    console.error("Redis hydrate failed:", error);
+  }
+}
+
+async function persistMemoryToRedis(sessionKey) {
+  if (!redis || !sessionKey) return;
+  const mem = conversationMemory.get(sessionKey);
+  if (!mem) return;
+  try {
+    await redis.set(`mem:${sessionKey}`, mem, { ex: memoryTtlSeconds });
+  } catch (error) {
+    console.error("Redis persist failed:", error);
+  }
 }
 
 function extractDeviceName(text) {
@@ -255,9 +297,12 @@ function buildAmbiguousDeviceAnswer(token, english, shouldGreetToday) {
   return lines.filter(Boolean).join("\n");
 }
 
-function updateRecentMessages(memory, customerText, answer = "") {
+function updateRecentMessages(memory, customerText, answer = "", sessionKey = "") {
   memory.lastMessages.push({ customerText, answer });
   memory.lastMessages = memory.lastMessages.slice(-4);
+  if (sessionKey) {
+    persistMemoryToRedis(sessionKey).catch(() => {});
+  }
 }
 
 function isEnglishText(text) {
@@ -308,6 +353,10 @@ function getBangkokDateObject() {
 
 function extractRentalDays(text) {
   const value = String(text || "").toLowerCase();
+  const weekMatch = value.match(/(\d+)\s*(?:อาทิตย์|สัปดาห์|week|weeks|wk)/i);
+  if (weekMatch) return Number(weekMatch[1]) * 7;
+  const monthMatch = value.match(/(\d+)\s*(?:เดือน|month|months|mo)\b/i);
+  if (monthMatch) return Number(monthMatch[1]) * 30;
   const patterns = [
     /(\d+)\s*วัน/i,
     /(\d+)\s*(?:day|days|d)\b/i,
@@ -321,7 +370,7 @@ function extractRentalDays(text) {
     if (match) return Number(match[1]);
   }
 
-  if (/สัปดาห์|week|weekly/.test(value)) return 7;
+  if (/อาทิตย์|สัปดาห์|week|weekly/.test(value)) return 7;
   if (/เดือน|รายเดือน|month|monthly/.test(value)) return 30;
   return null;
 }
@@ -389,6 +438,40 @@ function includesLongTermRentalQuestion(text) {
 function includesPromotionQuestion(text) {
   const value = normalizeSearchText(text);
   return /โปร|โปรโมชั่น|ส่วนลด|ลดราคา|promotion|promo|discount|deal/.test(value);
+}
+
+function getBangkokHour() {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", hour12: false }).formatToParts(new Date());
+  return Number(parts.find((p) => p.type === "hour")?.value || 0);
+}
+
+function isWithinBusinessHours() {
+  const hour = getBangkokHour();
+  return hour >= 10 && hour < 18;
+}
+
+function includesRentNowQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /(เช่า.{0,4}ตอนนี้|ตอนนี้.{0,4}ว่าง|เช่าเลย|เอาตอนนี้|เอาเลย|รับเครื่องตอนนี้|rent now|right now|today now|available now)/.test(
+    value,
+  );
+}
+
+function buildRentNowAnswer(customerText, shouldGreetToday) {
+  if (!includesRentNowQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  const open = isWithinBusinessHours();
+  const lines = [];
+  if (shouldGreetToday) lines.push(english ? "Hello 🎮✨" : "สวัสดีครับ 🎮✨");
+  if (open) {
+    lines.push(english ? "✅ Yes, we can deliver today!" : "✅ ได้ครับ ส่งวันนี้ทันครับ");
+    lines.push(english ? "🙏 Interested? Tell me the device and how many days." : "🙏 สนใจแจ้งรุ่นเครื่องและจำนวนวันได้เลยครับ 😊");
+  } else {
+    lines.push(english ? "🔒 Sorry, shop is closed for the day." : "🔒 ขออภัยครับ ร้านปิดแล้ว");
+    lines.push(english ? "🚚 Next delivery available tomorrow 10:00 - 18:00." : "🚚 จัดส่งได้อีกทีพรุ่งนี้ ตั้งแต่ 10:00 - 18:00 เป็นต้นไปครับ");
+    lines.push(english ? "🙏 Interested in booking for tomorrow? Just tell me 😊" : "🙏 สนใจจองเป็นพรุ่งนี้ แจ้งได้เลยครับ 😊");
+  }
+  return lines.filter(Boolean).join("\n");
 }
 
 function includesAvailabilityQuestion(text) {
@@ -766,7 +849,7 @@ function buildEnglishPaymentLines(calc, noContract) {
   ].join("\n\n");
 }
 
-function buildPriceAnswer(customerText, memory, shouldGreetToday) {
+async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   if (!includesPriceQuestion(customerText, memory)) return "";
 
   const english = isEnglishText(customerText);
@@ -874,6 +957,29 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
 
   const keep = (arr) => arr.filter((x) => x !== undefined && x !== null && x !== false).join("\n").replace(/\n{3,}/g, "\n\n").trim();
 
+  let inventoryStatus = null;
+  if (startDate) {
+    try {
+      const inv = await loadInventorySummary();
+      const lineForDevice = inv.split("\n").find((l) => l.toLowerCase().includes(deviceName.toLowerCase()));
+      if (lineForDevice) {
+        const available = /available/i.test(lineForDevice) && !/not available/i.test(lineForDevice);
+        const dateMatch = lineForDevice.match(/วันที่คาดว่าจะว่าง:\s*([^)]+)/);
+        inventoryStatus = { available, nextDate: dateMatch ? dateMatch[1].trim() : "" };
+      }
+    } catch (error) {
+      console.error("Inventory check inside buildPriceAnswer failed:", error);
+    }
+  }
+
+  const GAMES_LINK = "https://ajgamerental2021.github.io/ajconsole/game_index.html";
+  const gamesInfoLines = english
+    ? ["✨ You can pick up to 10 games per rental", "📚 Browse all games:", `👉 ${GAMES_LINK}`]
+    : ["✨ ลูกค้าเลือกได้สูงสุด 10 เกม ต่อการเช่า 1 ครั้ง", "📚 ดูรายการเกมทั้งหมดและเลือกเกมได้ที่:", `👉 ${GAMES_LINK}`];
+  const warningLines = english
+    ? ["⚠️ Please send Google Maps location for admin to confirm delivery fee", "⚠️ Please read all rental terms carefully before transferring"]
+    : ["⚠️ แจ้งโลเคชั่นจัดส่งเป็นลิ้งค์ Google Maps เพื่อให้แอดมินเช็คค่าส่งด้วยนะครับ", "⚠️ รบกวนอ่านรายละเอียดการเช่าอย่างละเอียดก่อนโอนจอง"];
+
   if (english) {
     const groups = [];
     if (shouldGreetToday) groups.push("Hello 🎮✨");
@@ -891,8 +997,16 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
     ];
     groups.push(keep(pay));
     if (returnDate) groups.push(`📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`);
+    if (returnDate) groups.push(keep(gamesInfoLines));
+    if (inventoryStatus && !inventoryStatus.available) {
+      const nextDateLine = inventoryStatus.nextDate ? `📅 Next available: ${inventoryStatus.nextDate}` : "📅 Will confirm queue shortly.";
+      groups.push(keep([`⚠️ ${deviceName} is fully booked on ${formatDate(startDate, true)}`, nextDateLine, "🙏 Would you like to book on the next available date instead?"]));
+    } else if (inventoryStatus && inventoryStatus.available) {
+      groups.push(`✅ ${deviceName} is available on ${formatDate(startDate, true)}`);
+    }
     if (monthly) groups.push("ℹ️ Short-term rentals are usually daily/weekly, monthly available at this rate.");
     if (includePayment) groups.push(buildEnglishPaymentLines(calc, noContract));
+    if (includePayment) groups.push(keep(warningLines));
     if (!startDate) groups.push("📍 Please send start date and Google Maps link for delivery fee.");
     return groups.filter(Boolean).join("\n\n");
   }
@@ -913,8 +1027,16 @@ function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   ];
   groups.push(keep(pay));
   if (returnDate) groups.push(`📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}`);
+  if (returnDate) groups.push(keep(gamesInfoLines));
+  if (inventoryStatus && !inventoryStatus.available) {
+    const nextDateLine = inventoryStatus.nextDate ? `📅 คาดว่าว่างวันที่: ${inventoryStatus.nextDate}` : "📅 เดี๋ยวแอดมินยืนยันคิวอีกครั้งครับ";
+    groups.push(keep([`⚠️ ${deviceName} คิวเต็มในวันที่ ${formatDate(startDate)} ครับ`, nextDateLine, "🙏 สนใจจองเป็นวันนั้นแทนไหมครับ?"]));
+  } else if (inventoryStatus && inventoryStatus.available) {
+    groups.push(`✅ ${deviceName} ว่างวันที่ ${formatDate(startDate)} ครับ`);
+  }
   if (monthly) groups.push("ℹ️ ปกติเช่าระยะสั้นรายวัน/รายสัปดาห์ แต่มีเรทรายเดือนตามนี้ครับ");
   if (includePayment) groups.push(buildThaiPaymentLines(calc, noContract));
+  if (includePayment) groups.push(keep(warningLines));
   if (!startDate) groups.push("📍 ถ้าสนใจจอง แจ้งวันเริ่มเช่าและส่งลิงก์ Google Maps ได้เลยครับ");
   return groups.filter(Boolean).join("\n\n");
 }
@@ -2205,15 +2327,20 @@ app.get("/admin/take-action", async (req, res) => {
       })
       .join("");
 
+    const expiry = globalPause?.expiresAt ? new Date(globalPause.expiresAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) : "ไม่จำกัด (ถาวร)";
     const globalBanner = globalPause
       ? `<div style="padding:12px;background:#fee;border:2px solid #c33;border-radius:8px;margin-bottom:16px;">
           <strong>🌐 Global Pause กำลังเปิด</strong><br/>
           AI หยุดตอบทุกคน · ${globalPause.reason}<br/>
+          ⏰ ถึง: ${expiry}<br/>
           <a href="/admin/resume-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;margin-top:8px;padding:8px 14px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume All</a>
         </div>`
       : `<div style="padding:12px;background:#efe;border:1px solid #0a7;border-radius:8px;margin-bottom:16px;">
           ✅ AI ตอบปกติ
-          <br/><a href="/admin/pause-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;margin-top:8px;padding:8px 14px;background:#c33;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">⏸ Pause All / หยุดทุกคน</a>
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;">
+            <a href="/admin/pause-all?token=${encodeURIComponent(adminToken)}&minutes=720" style="padding:8px 14px;background:#c33;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">⏸ Pause All 12 ชม.</a>
+            <a href="/admin/pause-all?token=${encodeURIComponent(adminToken)}&minutes=0&reason=global_permanent_pause" style="padding:8px 14px;background:#900;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">🔒 Pause All ถาวร (ไม่มี timer)</a>
+          </div>
         </div>`;
     return res.type("html").send(`
       <html>
@@ -2456,14 +2583,19 @@ app.get("/admin/resume", async (req, res) => {
       })
       .join("");
 
+    const expiryR = globalPause?.expiresAt ? new Date(globalPause.expiresAt).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) : "ไม่จำกัด (ถาวร)";
     const globalBanner = globalPause
       ? `<div style="padding:12px;background:#fee;border:2px solid #c33;border-radius:8px;margin-bottom:16px;">
           <strong>🌐 Global Pause กำลังเปิด</strong> · ${globalPause.reason}<br/>
+          ⏰ ถึง: ${expiryR}<br/>
           <a href="/admin/resume-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;margin-top:8px;padding:8px 14px;background:#0a7;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">▶️ Resume All</a>
         </div>`
       : `<div style="padding:12px;background:#efe;border:1px solid #0a7;border-radius:8px;margin-bottom:16px;">
-          ✅ AI ตอบปกติ ·
-          <a href="/admin/pause-all?token=${encodeURIComponent(adminToken)}" style="display:inline-block;margin-left:6px;padding:6px 12px;background:#c33;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">⏸ Pause All</a>
+          ✅ AI ตอบปกติ
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;">
+            <a href="/admin/pause-all?token=${encodeURIComponent(adminToken)}&minutes=720" style="padding:6px 12px;background:#c33;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">⏸ Pause All 12 ชม.</a>
+            <a href="/admin/pause-all?token=${encodeURIComponent(adminToken)}&minutes=0&reason=global_permanent_pause" style="padding:6px 12px;background:#900;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">🔒 Pause All ถาวร</a>
+          </div>
         </div>`;
     return res.type("html").send(`<html><head>${meta.viewport}</head>
       <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;max-width:600px;">
@@ -2499,6 +2631,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
   const intentName = queryResult.intent?.displayName || "";
   const sessionKey = getSessionKey(req);
   const dialogflowSession = getDialogflowSession(req);
+  await hydrateMemoryFromRedis(sessionKey);
   const memory = getMemory(sessionKey);
   const today = getBangkokDateParts();
   const detectedDevice = extractDeviceName(customerText);
@@ -2545,7 +2678,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
     });
 
     memory.greetedDate = today.dateKey;
-    updateRecentMessages(memory, customerText, answer);
+    updateRecentMessages(memory, customerText, answer, sessionKey);
     return res.json(dialogflowText(answer));
   }
 
@@ -2567,7 +2700,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
     });
 
     memory.greetedDate = today.dateKey;
-    updateRecentMessages(memory, customerText, answer);
+    updateRecentMessages(memory, customerText, answer, sessionKey);
     return res.json(dialogflowText(answer));
   }
 
@@ -2611,7 +2744,16 @@ app.post("/dialogflow-webhook", async (req, res) => {
       });
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer);
+      updateRecentMessages(memory, customerText, answer, sessionKey);
+      return res.json(dialogflowText(answer));
+    }
+
+    const rentNowAnswer = buildRentNowAnswer(customerText, shouldGreetForNextBlock());
+    if (rentNowAnswer) {
+      answerBlocks.push(rentNowAnswer);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
     }
 
@@ -2620,7 +2762,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       answerBlocks.push(availabilityAnswer);
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer);
+      updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
     }
 
@@ -2629,7 +2771,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       answerBlocks.push(outOfAreaAnswer);
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer);
+      updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
     }
 
@@ -2649,7 +2791,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       });
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer);
+      updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
     }
 
@@ -2658,7 +2800,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       answerBlocks.push(includedGamesAnswer);
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer);
+      updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
     }
 
@@ -2667,7 +2809,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       answerBlocks.push(accountAnswer);
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer);
+      updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
     }
 
@@ -2692,7 +2834,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       );
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer);
+      updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
     }
 
@@ -2723,7 +2865,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       }
 
       if (!longTermAnswer && !returnAnswer && !extensionAnswer) {
-        const priceAnswer = buildPriceAnswer(customerText, memory, shouldGreetForNextBlock());
+        const priceAnswer = await buildPriceAnswer(customerText, memory, shouldGreetForNextBlock());
         if (priceAnswer) {
           answerBlocks.push(priceAnswer);
         }
@@ -2777,7 +2919,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
     if (answerBlocks.length > 0) {
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer);
+      updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
     }
 
@@ -2796,7 +2938,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
 
     const answer = await askAI(customerText, memory, sessionContext);
     memory.greetedDate = today.dateKey;
-    updateRecentMessages(memory, customerText, answer);
+    updateRecentMessages(memory, customerText, answer, sessionKey);
     return res.json(dialogflowText(answer));
   } catch (error) {
     console.error("AI fallback failed:", error);
