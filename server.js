@@ -18,13 +18,25 @@ const inventorySheetId =
 const inventoryGid = process.env.INVENTORY_GID || "1879984026";
 const inventoryCacheMs = Number(process.env.INVENTORY_CACHE_MS || 60000);
 const inventoryFetchTimeoutMs = Number(process.env.INVENTORY_FETCH_TIMEOUT_MS || 3000);
+const gameDataUrl =
+  process.env.GAME_DATA_URL ||
+  "https://gist.github.com/ajgamerental2021/4c37e6a92859ce10f353d2ccb1ecbabd/raw/b5ae091ddb5cd977f68ca6c447c7f8a2afde46df/ajgame-data.json";
+const gameDataCacheMs = Number(process.env.GAME_DATA_CACHE_MS || 300000);
+const gameDataFetchTimeoutMs = Number(process.env.GAME_DATA_FETCH_TIMEOUT_MS || 3000);
+const adminToken = process.env.ADMIN_TOKEN || "";
+const pausedReplyText = process.env.PAUSED_REPLY_TEXT || "";
 
 let knowledgeBase = "";
 let inventoryCache = {
   expiresAt: 0,
   summary: "",
 };
+let gameDataCache = {
+  expiresAt: 0,
+  data: null,
+};
 const conversationMemory = new Map();
+const pausedSessions = new Map();
 
 const deviceAliases = [
   ["Lenovo Legion GO2", ["lenovo legion go2", "legion go2", "go2"]],
@@ -61,6 +73,12 @@ function dialogflowText(text) {
         },
       },
     ],
+  };
+}
+
+function dialogflowEmpty() {
+  return {
+    fulfillmentMessages: [],
   };
 }
 
@@ -131,6 +149,162 @@ function extractDeviceName(text) {
 function updateRecentMessages(memory, customerText, answer = "") {
   memory.lastMessages.push({ customerText, answer });
   memory.lastMessages = memory.lastMessages.slice(-4);
+}
+
+function normalizeSearchText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function includesGameQuestion(text) {
+  const normalized = normalizeSearchText(text);
+  return /เกม|game|เล่น|มี/.test(normalized);
+}
+
+async function fetchJsonWithTimeout(url, ms) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), ms);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Fetch failed: ${response.status}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function loadGameData() {
+  const now = Date.now();
+  if (gameDataCache.data && gameDataCache.expiresAt > now) {
+    return gameDataCache.data;
+  }
+
+  const data = await fetchJsonWithTimeout(gameDataUrl, gameDataFetchTimeoutMs);
+  gameDataCache = {
+    expiresAt: now + gameDataCacheMs,
+    data,
+  };
+
+  return data;
+}
+
+function getPlatformName(gameData, platformId) {
+  return gameData.platforms?.find((platform) => platform.id === platformId)?.name || platformId;
+}
+
+async function lookupGameSummary(customerText, { force = false } = {}) {
+  if (!force && !includesGameQuestion(customerText)) {
+    return "";
+  }
+
+  const gameData = await loadGameData();
+  const stopwords = new Set([
+    "มี",
+    "เกม",
+    "game",
+    "ไหม",
+    "มั้ย",
+    "เล่น",
+    "ได้",
+    "ใน",
+    "เครื่อง",
+    "บน",
+    "ขอ",
+    "ถาม",
+    "เช่า",
+    "available",
+    "have",
+    "do",
+    "you",
+    "has",
+    "is",
+    "there",
+    "on",
+  ]);
+  const query = normalizeSearchText(customerText)
+    .split(" ")
+    .filter((part) => !stopwords.has(part))
+    .join(" ")
+    .trim();
+
+  if (query.length < 3) {
+    return "ข้อมูลเกม: ลูกค้าถามเรื่องเกม แต่ยังไม่ได้ระบุชื่อเกมชัดเจน ให้ส่งลิงก์เลือกเกมและถามชื่อเกมที่สนใจ";
+  }
+
+  const queryParts = query.split(" ").filter((part) => part.length >= 3);
+  const matches = [];
+
+  for (const game of gameData.games || []) {
+    const gameName = normalizeSearchText(game.name);
+    const directMatch = gameName.includes(query) || query.includes(gameName);
+    const tokenMatch =
+      queryParts.length > 0 && queryParts.every((part) => gameName.includes(part));
+
+    if (directMatch || tokenMatch) {
+      matches.push({
+        name: game.name,
+        platform: getPlatformName(gameData, game.platformId),
+        unavailable: Boolean(game.unavailable),
+        availableDate: game.available_date || "",
+      });
+    }
+
+    if (matches.length >= 8) break;
+  }
+
+  if (matches.length === 0) {
+    return [
+      "ข้อมูลเกม: ไม่พบชื่อเกมที่ตรงกับคำถามใน Gist",
+      "ให้ตอบว่าเบื้องต้นยังไม่เจอในรายการรวม และให้ลูกค้าเช็ค/เลือกเกมเองได้ที่ https://ajgamerental2021.github.io/ajconsole/game_index.html",
+    ].join("\n");
+  }
+
+  const lines = matches.map((match) => {
+    const status = match.unavailable
+      ? `ไม่พร้อมให้เลือกตอนนี้${match.availableDate ? `, คาดว่าจะว่าง ${match.availableDate}` : ""}`
+      : "มีให้เลือก";
+    return `- ${match.name}: ${match.platform} (${status})`;
+  });
+
+  return [
+    "ข้อมูลเกมจาก Gist:",
+    "ถ้าพบเกมเดียวกันหลายเครื่อง ให้บอกเครื่องที่มีให้ลูกค้าเลือก",
+    ...lines,
+    "ลิงก์เลือกเกมทั้งหมด: https://ajgamerental2021.github.io/ajconsole/game_index.html",
+  ].join("\n");
+}
+
+function getActivePause(sessionKey) {
+  const pause = pausedSessions.get(sessionKey);
+  if (!pause) return null;
+
+  if (pause.expiresAt && pause.expiresAt <= Date.now()) {
+    pausedSessions.delete(sessionKey);
+    return null;
+  }
+
+  return pause;
+}
+
+function requireAdmin(req, res) {
+  if (!adminToken) {
+    res.status(403).json({ ok: false, error: "ADMIN_TOKEN is not configured" });
+    return false;
+  }
+
+  const token = req.get("x-admin-token") || req.query.token;
+  if (token !== adminToken) {
+    res.status(401).json({ ok: false, error: "Unauthorized" });
+    return false;
+  }
+
+  return true;
 }
 
 async function loadInventorySummary() {
@@ -229,6 +403,7 @@ async function askAI(customerText, memory, sessionContext) {
   }
 
   let inventorySummary = "";
+  let gameSummary = "";
 
   try {
     inventorySummary = await loadInventorySummary();
@@ -238,15 +413,25 @@ async function askAI(customerText, memory, sessionContext) {
       "ข้อมูลสต็อก: ตอนนี้เช็ค Google Sheet ไม่สำเร็จ ถ้าลูกค้าถามเครื่องว่าง ให้บอกว่าจะให้แอดมินเช็คคิวล่าสุดให้นะคะ";
   }
 
+  try {
+    gameSummary = await lookupGameSummary(customerText);
+  } catch (error) {
+    console.error("Game lookup failed:", error);
+    gameSummary =
+      "ข้อมูลเกม: ตอนนี้เช็ค Gist ไม่สำเร็จ ถ้าลูกค้าถามเกม ให้ส่งลิงก์เลือกเกมทั้งหมด https://ajgamerental2021.github.io/ajconsole/game_index.html";
+  }
+
   const response = await withTimeout(
     openai.responses.create({
       model,
-      max_output_tokens: 520,
+      max_output_tokens: 700,
       instructions: [
         "คุณเป็นแอดมินร้าน Aj เช่าเครื่องเกม ตอบสุภาพ เป็นธรรมชาติ และอ่านง่าย",
         "ตอบเป็นภาษาเดียวกับลูกค้า ถ้าลูกค้าพิมพ์ไทยให้ตอบไทย ถ้าลูกค้าพิมพ์อังกฤษให้ตอบอังกฤษ",
-        "จัดคำตอบเป็นบรรทัดสั้น ๆ ใช้ emoji ที่เกี่ยวข้องพอดี ๆ เช่น 🎮 📅 💰 🚚 ✅ ⚠️",
-        "ห้ามเขียนเป็นย่อหน้ายาว ถ้ามีราคา/เงื่อนไขให้แยกบรรทัดให้อ่านง่าย",
+        "จัดคำตอบเป็นบรรทัดสั้น ๆ และเว้นบรรทัดระหว่างหัวข้อเสมอ",
+        "ใช้ emoji ให้ดูเป็นมิตรและชัดเจนในทุกหัวข้อ เช่น 🎮✨ 📅🕒 💰✅ 🚚⚡️ 📝📌 ⚠️",
+        "ห้ามเขียนเป็นย่อหน้ายาว ถ้ามีราคา/เงื่อนไข/ขั้นตอน ให้แยกเป็นหลายบรรทัดพร้อมเว้นบรรทัด",
+        "รูปแบบที่ชอบ: หัวข้อ 1 บรรทัด, รายละเอียด 2-5 บรรทัด, เว้นบรรทัด, ขั้นต่อไป 1-3 บรรทัด",
         "ถ้า shouldGreetToday=true ให้เริ่มด้วยคำทักทายสั้น ๆ เช่น 'สวัสดีครับ' หรือ 'Hello' เฉพาะครั้งแรกของวันนั้น",
         "ถ้า shouldGreetToday=false ห้ามขึ้นต้นด้วยคำว่า สวัสดี/Hello อีก",
         "ตอบจากข้อมูลร้านที่ให้มาเท่านั้น ห้ามแต่งราคา สต็อก โปรโมชัน หรือเงื่อนไขเอง",
@@ -254,6 +439,8 @@ async function askAI(customerText, memory, sessionContext) {
         "ถ้าลูกค้าถามต่อโดยไม่ระบุชื่อเครื่อง ให้ใช้ lastDevice จาก context ก่อนหน้าเป็นเครื่องที่กำลังคุยอยู่",
         "ถ้าลูกค้าถามว่าเครื่องรุ่นใดว่างหรือไม่ ให้ใช้ข้อมูลสต็อกจาก Google Sheet ที่แนบมา",
         "ถ้าเครื่องมี Status = Available อย่างน้อย 1 เครื่อง ให้ตอบว่าว่าง แต่ถ้าลูกค้าต้องการจองตามวันที่เฉพาะ ให้แจ้งว่าจะให้แอดมินเช็คคิวและยืนยันอีกครั้ง",
+        "ถ้าลูกค้าถามว่ามีเกมนี้ไหม ให้ใช้ข้อมูลเกมจาก Gist ที่แนบมา ถ้าไม่พบให้ส่งลิงก์เลือกเกมทั้งหมด",
+        "ถ้าลูกค้าถามเลือกเกม ให้ส่งลิงก์ https://ajgamerental2021.github.io/ajconsole/game_index.html",
         "การคำนวณวันคืน: ถ้าเริ่มเช่าวันที่ X จำนวน N วัน ให้วันคืน = วันที่ X + N วัน เช่น เริ่ม 1 เช่า 3 วัน คืน 4, เริ่ม 1 เช่า 7 วัน คืน 8",
         "ถ้าลูกค้าพูดว่าเริ่มวันนี้ ให้ใช้วันที่ปัจจุบันใน Asia/Bangkok จาก context",
         "ถ้าเป็นเรื่องคืนเงิน เคลม ยกเลิกออเดอร์ ต่อรองพิเศษ หรือข้อร้องเรียน ให้บอกว่าจะส่งต่อแอดมิน",
@@ -265,6 +452,7 @@ async function askAI(customerText, memory, sessionContext) {
           content: [
             `ข้อมูลร้าน:\n${knowledgeBase}`,
             inventorySummary,
+            gameSummary,
             `บริบทสนทนา:\n${sessionContext}`,
             `ข้อความลูกค้า:\n${customerText}`,
           ].join("\n\n"),
@@ -290,11 +478,15 @@ app.get("/debug", (_req, res) => {
     ok: true,
     model,
     hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
+    hasAdminToken: Boolean(adminToken),
     aiTimeoutMs,
     inventorySheetId,
     inventoryGid,
     inventoryCacheMs,
     inventoryFetchTimeoutMs,
+    gameDataUrl,
+    gameDataCacheMs,
+    gameDataFetchTimeoutMs,
   });
 });
 
@@ -306,6 +498,65 @@ app.get("/inventory", async (_req, res) => {
     console.error("Inventory endpoint failed:", error);
     res.status(500).json({ ok: false, error: "Inventory lookup failed" });
   }
+});
+
+app.get("/games/search", async (req, res) => {
+  try {
+    const q = String(req.query.q || "");
+    const summary = await lookupGameSummary(q, { force: true });
+    res.type("text/plain").send(summary || "กรุณาใส่ชื่อเกมที่ต้องการค้นหา เช่น /games/search?q=elden ring");
+  } catch (error) {
+    console.error("Game search endpoint failed:", error);
+    res.status(500).json({ ok: false, error: "Game lookup failed" });
+  }
+});
+
+app.get("/admin/pauses", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const now = Date.now();
+  const pauses = [...pausedSessions.entries()].map(([sessionKey, pause]) => ({
+    sessionKey,
+    reason: pause.reason || "",
+    expiresAt: pause.expiresAt ? new Date(pause.expiresAt).toISOString() : null,
+    remainingSeconds: pause.expiresAt ? Math.max(0, Math.round((pause.expiresAt - now) / 1000)) : null,
+  }));
+
+  res.json({ ok: true, pauses });
+});
+
+app.post("/admin/pause", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const sessionKey = String(req.body?.sessionKey || req.query.sessionKey || "").trim();
+  const minutes = Number(req.body?.minutes || req.query.minutes || 60);
+  const reason = String(req.body?.reason || req.query.reason || "admin_takeover");
+
+  if (!sessionKey) {
+    return res.status(400).json({ ok: false, error: "sessionKey is required" });
+  }
+
+  const expiresAt = minutes > 0 ? Date.now() + minutes * 60 * 1000 : 0;
+  pausedSessions.set(sessionKey, { expiresAt, reason });
+  res.json({
+    ok: true,
+    sessionKey,
+    reason,
+    expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+  });
+});
+
+app.post("/admin/resume", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const sessionKey = String(req.body?.sessionKey || req.query.sessionKey || "").trim();
+
+  if (!sessionKey) {
+    return res.status(400).json({ ok: false, error: "sessionKey is required" });
+  }
+
+  pausedSessions.delete(sessionKey);
+  res.json({ ok: true, sessionKey, resumed: true });
 });
 
 app.post("/dialogflow-webhook", async (req, res) => {
@@ -331,6 +582,17 @@ app.post("/dialogflow-webhook", async (req, res) => {
     lastDevice: memory.lastDevice,
     shouldGreetToday,
   });
+
+  const activePause = getActivePause(sessionKey);
+  if (activePause) {
+    console.log("AI paused for session:", {
+      sessionKey,
+      reason: activePause.reason,
+      expiresAt: activePause.expiresAt ? new Date(activePause.expiresAt).toISOString() : null,
+    });
+
+    return res.json(pausedReplyText ? dialogflowText(pausedReplyText) : dialogflowEmpty());
+  }
 
   if (!isFallbackIntent(intentName)) {
     return res.json(dialogflowText(queryResult.fulfillmentText || "รับทราบค่ะ"));

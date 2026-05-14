@@ -21,6 +21,16 @@ services:
         value: "60000"
       - key: INVENTORY_FETCH_TIMEOUT_MS
         value: "3000"
+      - key: GAME_DATA_URL
+        value: https://gist.github.com/ajgamerental2021/4c37e6a92859ce10f353d2ccb1ecbabd/raw/b5ae091ddb5cd977f68ca6c447c7f8a2afde46df/ajgame-data.json
+      - key: GAME_DATA_CACHE_MS
+        value: "300000"
+      - key: GAME_DATA_FETCH_TIMEOUT_MS
+        value: "3000"
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: PAUSED_REPLY_TEXT
+        value: ""
   - type: cron
     name: line-dialogflow-ai-fallback-ping
     env: node

@@ -49,6 +49,11 @@ git push -u origin main
    - `INVENTORY_GID` = `1879984026`
    - `INVENTORY_CACHE_MS` = `60000`
    - `INVENTORY_FETCH_TIMEOUT_MS` = `3000`
+   - `GAME_DATA_URL` = `https://gist.github.com/ajgamerental2021/4c37e6a92859ce10f353d2ccb1ecbabd/raw/b5ae091ddb5cd977f68ca6c447c7f8a2afde46df/ajgame-data.json`
+   - `GAME_DATA_CACHE_MS` = `300000`
+   - `GAME_DATA_FETCH_TIMEOUT_MS` = `3000`
+   - `ADMIN_TOKEN` = ตั้งเป็นรหัสยาว ๆ เอง ใช้สำหรับ pause AI รายลูกค้า
+   - `PAUSED_REPLY_TEXT` = เว้นว่างไว้ถ้าต้องการให้ AI เงียบตอน pause
 7. กด Deploy
 
 หลัง deploy เสร็จ Render จะให้ URL ประมาณนี้:
@@ -78,6 +83,14 @@ https://your-service-name.onrender.com/debug
 ```
 
 ควรเห็น `hasOpenAIKey: true` และ `model: "gpt-4o-mini"`
+
+เช็คเกมจาก Gist ได้ที่:
+
+```text
+https://your-service-name.onrender.com/games/search?q=elden ring
+```
+
+ถ้าเจอเกม ระบบจะบอกว่าเกมนั้นอยู่บนเครื่อง/แพลตฟอร์มไหน
 
 ## 4. ตั้งค่า Dialogflow ES
 
@@ -183,17 +196,56 @@ Human Handoff
 
 เหมาะกับช่วงทดลองระบบ แต่ไม่สะดวกถ้าต้องทำบ่อย
 
-### วิธีที่ 3: ทำระบบ pause รายลูกค้า
+### วิธีที่ 3: ระบบ pause รายลูกค้า
 
-วิธีนี้ดีที่สุดสำหรับ production แต่ต้องมีที่เก็บสถานะ เช่น Google Sheet/Database ว่า user ไหนอยู่ในโหมดแอดมิน
+เวอร์ชันนี้มีระบบ pause รายลูกค้าแบบ in-memory แล้ว เหมาะสำหรับใช้งานทันทีบน Render instance เดียว
 
-แนวคิด:
+ข้อควรรู้:
+
+- ถ้า Render restart/deploy ใหม่ รายการ pause จะหาย
+- ถ้าต้องการให้ pause อยู่ถาวร ต้องต่อ Google Sheet/Database เพิ่มในขั้นถัดไป
+- ตอน pause ถ้า `PAUSED_REPLY_TEXT` ว่าง ระบบจะไม่ส่งข้อความตอบกลับ เพื่อให้แอดมินตอบเอง
+
+ก่อนใช้ ให้ตั้ง env:
 
 ```text
-userId = Uxxxx
-ai_paused_until = 2026-05-14 18:00
+ADMIN_TOKEN=ตั้งรหัสลับยาวๆเอง
+PAUSED_REPLY_TEXT=
 ```
 
-ถ้า user นั้นทักมาในช่วง pause ระบบจะไม่เรียก AI และให้แอดมินตอบเอง
+หา `sessionKey` ได้จาก Render Logs หลังลูกค้าทักมา จะมีบรรทัด:
 
-เวอร์ชันปัจจุบันยังไม่ได้ต่อ pause database รายลูกค้า ถ้าต้องการใช้จริงควรทำเป็นขั้นถัดไป
+```text
+Dialogflow webhook: { sessionKey: "...", ... }
+```
+
+สั่ง pause 60 นาที:
+
+```bash
+curl -X POST "https://your-service-name.onrender.com/admin/pause" \
+  -H "Content-Type: application/json" \
+  -H "x-admin-token: YOUR_ADMIN_TOKEN" \
+  -d '{"sessionKey":"SESSION_KEY_FROM_LOGS","minutes":60,"reason":"admin_takeover"}'
+```
+
+ดูรายการที่ pause อยู่:
+
+```bash
+curl "https://your-service-name.onrender.com/admin/pauses" \
+  -H "x-admin-token: YOUR_ADMIN_TOKEN"
+```
+
+ปลด pause:
+
+```bash
+curl -X POST "https://your-service-name.onrender.com/admin/resume" \
+  -H "Content-Type: application/json" \
+  -H "x-admin-token: YOUR_ADMIN_TOKEN" \
+  -d '{"sessionKey":"SESSION_KEY_FROM_LOGS"}'
+```
+
+ถ้าต้องการให้ตอน pause มีข้อความแจ้งลูกค้า ให้ตั้ง:
+
+```text
+PAUSED_REPLY_TEXT=แอดมินกำลังเข้ามาดูแลให้นะครับ
+```
