@@ -19,3 +19,12 @@ services:
         value: "1879984026"
       - key: INVENTORY_CACHE_MS
         value: "60000"
+  - type: cron
+    name: line-dialogflow-ai-fallback-ping
+    env: node
+    schedule: "*/10 * * * *"
+    buildCommand: npm install
+    startCommand: npm run ping
+    envVars:
+      - key: PING_URL
+        sync: false

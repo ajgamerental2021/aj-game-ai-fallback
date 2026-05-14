@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "ping": "node scripts/ping-render.js"
   },
   "engines": {
     "node": ">=20"

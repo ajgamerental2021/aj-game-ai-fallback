@@ -114,3 +114,29 @@ https://your-service-name.onrender.com/dialogflow-webhook
 ## 7. หมายเหตุเรื่อง Render Free
 
 ถ้าใช้ Render free plan ตัว service อาจ sleep เมื่อไม่มีคนใช้ ช่วงแรกของการทักหลัง sleep อาจตอบช้าและ Dialogflow อาจ timeout ได้ ถ้าใช้งานจริงควรใช้ paid instance หรือ hosting ที่ไม่ sleep
+
+## 8. Cron Job สำหรับปลุก Render
+
+โปรเจกต์นี้มีสคริปต์ `npm run ping` สำหรับให้ Render Cron Job เรียก URL ของ web service เป็นระยะ
+
+ถ้าใช้ `render.yaml` แบบ Blueprint จะมี service ชื่อ:
+
+```text
+line-dialogflow-ai-fallback-ping
+```
+
+ให้ตั้ง Environment Variable ของ cron job:
+
+```text
+PING_URL=https://your-service-name.onrender.com/
+```
+
+schedule ตั้งไว้เป็น:
+
+```text
+*/10 * * * *
+```
+
+หมายถึง ping ทุก 10 นาที
+
+หมายเหตุ: Render Cron Job มีค่าใช้จ่ายขั้นต่ำต่อ cron job service ตามเงื่อนไขของ Render และการ ping ตลอดเวลาจะทำให้ Free web service ใช้ free instance hours ต่อเนื่อง
