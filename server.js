@@ -400,6 +400,59 @@ function includesPromotionQuestion(text) {
   return /โปร|โปรโมชั่น|ส่วนลด|ลดราคา|promotion|promo|discount|deal/.test(value);
 }
 
+function includesOutOfAreaQuestion(text) {
+  const value = normalizeSearchText(text);
+  const provinces = /เชียงใหม่|เชียงราย|ภูเก็ต|กระบี่|พัทยา|ชลบุรี|ระยอง|โคราช|นครราชสีมา|ขอนแก่น|อุดรธานี|หาดใหญ่|สงขลา|สุราษ|พิษณุโลก|นครสวรรค์|ลำปาง|เลย|ตรัง|ยะลา|ปัตตานี|นราธิวาส|อุบล|สกล|มหาสารคาม|ร้อยเอ็ด|กาฬสินธุ์|มุกดาหาร|หนองคาย|บุรีรัมย์|สุรินทร์|ศรีสะเกษ|เพชรบุรี|ประจวบ|ชุมพร|ระนอง|พังงา|เลย|น่าน|แพร่|พะเยา|แม่ฮ่องสอน|ตาก|กำแพงเพชร|สุโขทัย|อุตรดิตถ์/;
+  return /ส่งต่างจังหวัด|ต่างจังหวัด|ส่งจังหวัด/.test(value) || provinces.test(value);
+}
+
+function buildOutOfAreaAnswer(customerText, shouldGreetToday) {
+  if (!includesOutOfAreaQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        "🙏 Sorry, we only deliver in Bangkok & metro area (BMR)",
+        "📍 If you're in BMR, please share a Google Maps link to confirm delivery fee.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        "🙏 ขออภัยครับ ทางร้านส่งเฉพาะ กรุงเทพ-ปริมณฑล",
+        "📍 ถ้าอยู่ในเขตปริมณฑล แจ้งพิกัด Google Maps มาเช็คค่าส่งได้ครับ",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function includesPaymentSlipQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /โอนแล้ว|โอนเงินแล้ว|ส่งสลิป|สลิปโอน|ชำระแล้ว|จ่ายแล้ว|payment sent|paid already|sent slip|transferred/.test(
+    value,
+  );
+}
+
+function buildPaymentSlipAnswer(customerText, shouldGreetToday) {
+  if (!includesPaymentSlipQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🙏" : "",
+        "✅ Got it! Thank you for the payment 🙏",
+        "👨‍💼 Admin will verify the slip and confirm the booking shortly.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🙏" : "",
+        "✅ รับเรื่องครับ ขอบคุณที่โอนนะครับ 🙏",
+        "👨‍💼 เดี๋ยวแอดมินช่วยเช็คสลิปและยืนยันคิวให้ครับ",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
 function includesIncludedGamesQuestion(text) {
   const value = normalizeSearchText(text);
   if (/ไอดี|account|psn/.test(value)) return false;
@@ -1866,6 +1919,57 @@ async function withTimeout(promise, ms) {
   }
 }
 
+const fewShotExamples = `
+ตัวอย่างที่ 1 — ถามรวมเกม
+ลูกค้า: "รวมเกมไหมครับ"
+context: lastDevice=PS5
+ตอบ:
+🎮 ใช่ครับ! เช่า PS5 รวมเกมให้ด้วย
+✨ เลือกได้สูงสุด 10 เกม ต่อการเช่า 1 ครั้ง
+📚 ดูรายการเกมทั้งหมด:
+👉 https://ajgamerental2021.github.io/ajconsole/game_index.html
+
+ตัวอย่างที่ 2 — ถามวิธีเล่นเกม
+ลูกค้า: "ดราก้อนบอลเล่น 2 คนยังไง"
+ตอบ:
+🙏 สักครู่จะมีแอดมินเข้ามาดูแลนะครับ 😊
+
+ตัวอย่างที่ 3 — เช่า xbox เปล่า ๆ (ambiguous)
+ลูกค้า: "เช่า xbox เท่าไหร่"
+ตอบ:
+🎮 สนใจ Xbox Series X หรือ Series S ครับ?
+
+⚡️ Series X
+💰 รายวัน 350 บาท
+🗓️ รายสัปดาห์ 1,800 บาท
+🔒 ค่าประกัน 2,000 บาท
+
+🟢 Series S
+💰 รายวัน 300 บาท
+🗓️ รายสัปดาห์ 1,500 บาท
+🔒 ค่าประกัน 2,000 บาท
+
+ตัวอย่างที่ 4 — สรุปการเช่า
+ลูกค้า: "ps5 เช่า 4 วัน เริ่ม 20/5/2026"
+ตอบ:
+🎮 PS5 เช่า 4 วัน
+💰 ค่าเช่า 1,600 บาท
+🔒 ค่าประกัน 2,000 บาท
+✅ รวมสุทธิ 3,600 บาท
+📅 รอบเช่า 20/05/2026 - 24/05/2026
+
+🏦 ข้อมูลโอน
+✅ เลขบัญชี 8690576029
+✅ ธนาคาร กรุงไทย
+✅ ชื่อบัญชี สมชาย เหมศิริ
+
+ตัวอย่างที่ 5 — ส่งต่างจังหวัด
+ลูกค้า: "ส่งเชียงใหม่ไหมครับ"
+ตอบ:
+🙏 ขออภัยครับ ทางร้านส่งเฉพาะกรุงเทพและปริมณฑลครับ
+📍 ถ้าอยู่ในเขตปริมณฑล แจ้งพิกัด Google Maps มาเช็คค่าส่งได้ครับ
+`.trim();
+
 async function askAI(customerText, memory, sessionContext) {
   if (!process.env.OPENAI_API_KEY) {
     return "ขออภัยค่ะ ขอส่งต่อให้แอดมินช่วยตรวจสอบให้นะคะ";
@@ -1931,6 +2035,7 @@ async function askAI(customerText, memory, sessionContext) {
             `ข้อมูลร้าน:\n${knowledgeBase}`,
             inventorySummary,
             gameSummary,
+            `ตัวอย่างการตอบที่ถูกต้อง (few-shot examples):\n${fewShotExamples}`,
             `บริบทสนทนา:\n${sessionContext}`,
             `ข้อความลูกค้า:\n${customerText}`,
           ].join("\n\n"),
@@ -2463,6 +2568,35 @@ app.post("/dialogflow-webhook", async (req, res) => {
         customerId: sessionKey,
         minutes,
         reason: "gameplay_howto_handoff",
+      });
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer);
+      return res.json(dialogflowText(answer));
+    }
+
+    const outOfAreaAnswer = buildOutOfAreaAnswer(customerText, shouldGreetForNextBlock());
+    if (outOfAreaAnswer) {
+      answerBlocks.push(outOfAreaAnswer);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer);
+      return res.json(dialogflowText(answer));
+    }
+
+    const paymentSlipAnswer = buildPaymentSlipAnswer(customerText, shouldGreetForNextBlock());
+    if (paymentSlipAnswer) {
+      answerBlocks.push(paymentSlipAnswer);
+      const minutes = 120;
+      pausedSessions.set(sessionKey, {
+        expiresAt: Date.now() + minutes * 60 * 1000,
+        reason: "payment_slip_handoff",
+      });
+      await persistPauseToWebhook({
+        sessionKey,
+        customerId: sessionKey,
+        minutes,
+        reason: "payment_slip_handoff",
       });
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
