@@ -25,6 +25,11 @@ const gameDataCacheMs = Number(process.env.GAME_DATA_CACHE_MS || 300000);
 const gameDataFetchTimeoutMs = Number(process.env.GAME_DATA_FETCH_TIMEOUT_MS || 3000);
 const adminToken = process.env.ADMIN_TOKEN || "";
 const pausedReplyText = process.env.PAUSED_REPLY_TEXT || "";
+const pauseSheetId = process.env.PAUSE_SHEET_ID || inventorySheetId;
+const pauseSheetGid = process.env.PAUSE_SHEET_GID || "";
+const pauseSheetCacheMs = Number(process.env.PAUSE_SHEET_CACHE_MS || 30000);
+const pauseSheetFetchTimeoutMs = Number(process.env.PAUSE_SHEET_FETCH_TIMEOUT_MS || 3000);
+const pauseWebhookUrl = process.env.PAUSE_WEBHOOK_URL || "";
 
 let knowledgeBase = "";
 let inventoryCache = {
@@ -35,8 +40,31 @@ let gameDataCache = {
   expiresAt: 0,
   data: null,
 };
+let pauseSheetCache = {
+  expiresAt: 0,
+  rows: [],
+};
 const conversationMemory = new Map();
 const pausedSessions = new Map();
+
+const deviceRates = new Map([
+  ["PS4", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
+  ["PS Portal", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
+  ["PS VR2", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
+  ["Nintendo Switch 1", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
+  ["Xbox Series S", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
+  ["Meta Quest 3s", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
+  ["Logitech G29", { daily: 300, weekly: 1500, deposit: 2000, category: "300" }],
+  ["Xbox Series X", { daily: 350, weekly: 1800, deposit: 2000, category: "350" }],
+  ["PS5", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
+  ["Nintendo Switch 2", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
+  ["ROG XBOX Ally X", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
+  ["Meta Quest 3", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
+  ["Steam Deck OLED", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
+  ["Viture Beast", { daily: 400, weekly: 2500, deposit: 2000, category: "400" }],
+  ["PS5 Pro", { daily: 500, weekly: 3000, deposit: 4000, category: "500" }],
+  ["Lenovo Legion GO2", { daily: 500, weekly: 3000, deposit: 4000, category: "500" }],
+]);
 
 const deviceAliases = [
   ["Lenovo Legion GO2", ["lenovo legion go2", "legion go2", "go2"]],
@@ -69,7 +97,7 @@ function dialogflowText(text) {
     fulfillmentMessages: [
       {
         text: {
-          text: [text],
+          text: [beautifyReply(text)],
         },
       },
     ],
@@ -90,6 +118,27 @@ function clipForChat(text) {
   const clean = String(text || "").replace(/\s+\n/g, "\n").trim();
   if (!clean) return "ขอส่งต่อให้แอดมินช่วยตรวจสอบให้นะคะ";
   return clean.length > 900 ? `${clean.slice(0, 897)}...` : clean;
+}
+
+function beautifyReply(text) {
+  const value = String(text || "").trim();
+  if (!value) return value;
+
+  const lines = value.split(/\r?\n/).map((line) => line.trimEnd());
+  const spaced = [];
+
+  for (const line of lines) {
+    const isVisualLine = /^[🎮📅🗓️💰🔒✅📝🚚⭐⚠️📍🗨️👋✨]/u.test(line);
+    const previous = spaced[spaced.length - 1];
+
+    if (isVisualLine && previous && previous !== "") {
+      spaced.push("");
+    }
+
+    spaced.push(line);
+  }
+
+  return spaced.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function getBangkokDateParts() {
@@ -115,11 +164,15 @@ function getBangkokDateParts() {
 
 function getSessionKey(req) {
   return (
-    req.body?.session ||
     req.body?.originalDetectIntentRequest?.payload?.data?.source?.userId ||
     req.body?.originalDetectIntentRequest?.payload?.source?.userId ||
+    req.body?.session ||
     "anonymous"
   );
+}
+
+function getDialogflowSession(req) {
+  return req.body?.session || "";
 }
 
 function getMemory(sessionKey) {
@@ -151,10 +204,225 @@ function updateRecentMessages(memory, customerText, answer = "") {
   memory.lastMessages = memory.lastMessages.slice(-4);
 }
 
+function isEnglishText(text) {
+  const value = String(text || "");
+  const latin = (value.match(/[A-Za-z]/g) || []).length;
+  const thai = (value.match(/[\u0E00-\u0E7F]/g) || []).length;
+  return latin > thai;
+}
+
+function formatMoney(amount, english = false) {
+  return `${Number(amount).toLocaleString("en-US")} ${english ? "THB" : "บาท"}`;
+}
+
+function extractRentalDays(text) {
+  const value = String(text || "").toLowerCase();
+  const patterns = [
+    /(\d+)\s*(?:วัน|day|days|d)\b/i,
+    /(?:เช่า|rent)\s*(\d+)\b/i,
+    /(\d+)\s*(?:คืน|night|nights)\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    if (match) return Number(match[1]);
+  }
+
+  if (/สัปดาห์|week|weekly/.test(value)) return 7;
+  return null;
+}
+
+function includesPriceQuestion(text) {
+  const value = normalizeSearchText(text);
+  const hasDevice = Boolean(extractDeviceName(text));
+  return (
+    /ราคา|กี่บาท|เท่าไหร่|ค่าเช่า|เรท|price|how much|rate|cost|rental fee/.test(value) ||
+    (hasDevice && /เช่า|rent|rental/.test(value))
+  );
+}
+
+function calculateRental(deviceName, days, noContract = false, returningCustomer = false) {
+  const rate = deviceRates.get(deviceName);
+  if (!rate) return null;
+
+  const rentalFee = days === 7 ? rate.weekly : days >= 3 && days <= 6 ? rate.daily * days : null;
+  if (rentalFee === null) return { rate };
+
+  const discount = returningCustomer ? Math.round(rentalFee * 0.1) : 0;
+  const discountedRentalFee = rentalFee - discount;
+  const deposit = noContract ? (rate.deposit === 4000 ? 8000 : 5000) : rate.deposit;
+
+  return {
+    rate,
+    rentalFee,
+    discount,
+    discountedRentalFee,
+    deposit,
+    total: discountedRentalFee + deposit,
+    bookingFee: 200,
+    payOnDelivery: discountedRentalFee + deposit - 200,
+  };
+}
+
+function buildPriceAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesPriceQuestion(customerText)) return "";
+
+  const english = isEnglishText(customerText);
+  const deviceName = extractDeviceName(customerText) || memory.lastDevice;
+
+  if (!deviceName || !deviceRates.has(deviceName)) {
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          "Which device would you like to rent?",
+          "",
+          "Please tell me the model, for example PS5, PS5 Pro, Nintendo Switch 2, or Meta Quest 3.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          "สนใจเช่าเครื่องรุ่นไหนครับ?",
+          "",
+          "แจ้งชื่อเครื่องได้เลย เช่น PS5, PS5 Pro, Nintendo Switch 2 หรือ Meta Quest 3 ครับ",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  memory.lastDevice = deviceName;
+
+  const days = extractRentalDays(customerText);
+  const noContract = /ไม่ทำสัญญา|ไม่แนบบัตร|no contract|without contract/i.test(customerText);
+  const returningCustomer = /ลูกค้าเก่า|เคยเช่า|returning|old customer/i.test(customerText);
+  const calc = days ? calculateRental(deviceName, days, noContract, returningCustomer) : null;
+  const rate = deviceRates.get(deviceName);
+
+  if (!days) {
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          `${deviceName} rental rate`,
+          "",
+          `💰 Daily: ${formatMoney(rate.daily, true)} / day`,
+          `📅 Minimum rental: 3 days`,
+          `🗓️ Weekly: ${formatMoney(rate.weekly, true)} / 7 days`,
+          `🔒 Deposit: ${formatMoney(rate.deposit, true)} (refundable on return day)`,
+          "",
+          "Please tell me how many days you would like to rent, and I can calculate the total for you.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          `ราคาเช่า ${deviceName} ครับ`,
+          "",
+          `💰 รายวัน: ${formatMoney(rate.daily)} / วัน`,
+          `📅 ขั้นต่ำ: 3 วัน`,
+          `🗓️ รายสัปดาห์: ${formatMoney(rate.weekly)} / 7 วัน`,
+          `🔒 ค่าประกัน: ${formatMoney(rate.deposit)} ได้คืนวันคืนเครื่อง`,
+          "",
+          "แจ้งจำนวนวันที่ต้องการเช่าได้เลยครับ เดี๋ยวคำนวณยอดรวมให้ครับ ✅",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  if (!calc || calc.rentalFee == null) {
+    return english
+      ? [
+          shouldGreetToday ? "Hello 🎮✨" : "",
+          `${deviceName} rental starts from 3 days.`,
+          "",
+          `💰 Daily: ${formatMoney(rate.daily, true)} / day`,
+          `🗓️ Weekly: ${formatMoney(rate.weekly, true)} / 7 days`,
+          "",
+          "For rentals longer than 7 days, admin will help confirm the best rate.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          `${deviceName} เช่าขั้นต่ำ 3 วันครับ`,
+          "",
+          `💰 รายวัน: ${formatMoney(rate.daily)} / วัน`,
+          `🗓️ รายสัปดาห์: ${formatMoney(rate.weekly)} / 7 วัน`,
+          "",
+          "ถ้าเช่าเกิน 7 วัน เดี๋ยวแอดมินช่วยเช็คเรทราคาให้เหมาะที่สุดครับ ✅",
+        ]
+          .filter(Boolean)
+          .join("\n");
+  }
+
+  return english
+    ? [
+        shouldGreetToday ? "Hello 🎮✨" : "",
+        `${deviceName} for ${days} days`,
+        "",
+        `💰 Rental fee: ${formatMoney(calc.rentalFee, true)}`,
+        calc.discount ? `⭐ Returning customer discount 10%: -${formatMoney(calc.discount, true)}` : "",
+        `🔒 Deposit: ${formatMoney(calc.deposit, true)} (refundable on return day)`,
+        "",
+        `✅ Total before delivery: ${formatMoney(calc.total, true)}`,
+        "",
+        "📝 Booking payment: 200 THB",
+        `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
+        "",
+        "Please send the start date and Google Maps link so we can check delivery fee.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+        `${deviceName} เช่า ${days} วันครับ`,
+        "",
+        `💰 ค่าเช่า: ${formatMoney(calc.rentalFee)}`,
+        calc.discount ? `⭐ ส่วนลดลูกค้าเก่า 10%: -${formatMoney(calc.discount)}` : "",
+        `🔒 ค่าประกัน: ${formatMoney(calc.deposit)} ได้คืนวันคืนเครื่อง`,
+        "",
+        `✅ รวมสุทธิ: ${formatMoney(calc.total)}`,
+        "",
+        "📝 โอนจองคิว: 200 บาท",
+        `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`,
+        "",
+        "ถ้าสนใจจอง แจ้งวันเริ่มเช่าและส่งลิงก์ Google Maps ได้เลยครับ 📍",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function includesAdminRequest(text) {
+  const value = normalizeSearchText(text);
+  return /แอดมิน|admin|คนจริง|พนักงาน|เจ้าหน้าที่|ติดต่อคน|คุยกับคน|human|staff|agent|representative/.test(
+    value,
+  );
+}
+
+function buildAdminPauseReply(customerText, shouldGreetToday) {
+  const english = isEnglishText(customerText);
+  return english
+    ? [
+        shouldGreetToday ? "Hello 👋" : "",
+        "🗨️ Admin will take care of you shortly.",
+        "",
+        "I’ll pause the automated reply now so our team can continue the conversation directly.",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        shouldGreetToday ? "สวัสดีครับ 👋" : "",
+        "🗨️ แอดมินจะเข้ามาดูแลให้นะครับ",
+        "",
+        "ระบบจะพักการตอบอัตโนมัติไว้ก่อน เพื่อให้แอดมินคุยต่อโดยตรงครับ ✅",
+      ]
+        .filter(Boolean)
+        .join("\n");
+}
+
 function normalizeSearchText(text) {
   return String(text || "")
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -290,6 +558,115 @@ function getActivePause(sessionKey) {
   }
 
   return pause;
+}
+
+function parseDateTime(value) {
+  if (!value) return 0;
+  const text = String(value).trim();
+  const timestamp = Date.parse(text);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+async function loadPauseSheetRows() {
+  if (!pauseSheetGid) return [];
+
+  const now = Date.now();
+  if (pauseSheetCache.expiresAt > now) {
+    return pauseSheetCache.rows;
+  }
+
+  const url = `https://docs.google.com/spreadsheets/d/${pauseSheetId}/export?format=csv&gid=${pauseSheetGid}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), pauseSheetFetchTimeoutMs);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Pause sheet fetch failed: ${response.status}`);
+    }
+
+    const csv = await response.text();
+    const rows = parse(csv, {
+      columns: true,
+      skip_empty_lines: true,
+      trim: true,
+    });
+
+    pauseSheetCache = {
+      expiresAt: now + pauseSheetCacheMs,
+      rows,
+    };
+
+    return rows;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function getPauseFromSheet(sessionKey, customerId = "") {
+  const rows = await loadPauseSheetRows();
+  const now = Date.now();
+
+  for (const row of rows) {
+    const status = String(row.Status || row.status || "").trim().toLowerCase();
+    if (status && !["paused", "pause", "active", "true", "yes"].includes(status)) {
+      continue;
+    }
+
+    const rowSession = String(row.SessionKey || row.sessionKey || row.session || "").trim();
+    const rowCustomer = String(row.CustomerId || row.customerId || row.userId || "").trim();
+    const matchesSession = rowSession && rowSession === sessionKey;
+    const matchesCustomer = rowCustomer && rowCustomer === customerId;
+
+    if (!matchesSession && !matchesCustomer) continue;
+
+    const until = parseDateTime(row.PausedUntil || row.pausedUntil || row.ExpiresAt || row.expiresAt);
+    if (until && until <= now) continue;
+
+    return {
+      expiresAt: until,
+      reason: row.Reason || row.reason || "pause_sheet",
+      source: "google_sheet",
+    };
+  }
+
+  return null;
+}
+
+async function getEffectivePause(sessionKey, customerId = "") {
+  const localPause = getActivePause(sessionKey);
+  if (localPause) return localPause;
+
+  try {
+    return await getPauseFromSheet(sessionKey, customerId);
+  } catch (error) {
+    console.error("Pause sheet lookup failed:", error);
+    return null;
+  }
+}
+
+async function persistPauseToWebhook({ sessionKey, customerId, minutes, reason }) {
+  if (!pauseWebhookUrl) return;
+
+  try {
+    const expiresAt = minutes > 0 ? new Date(Date.now() + minutes * 60 * 1000).toISOString() : "";
+    await fetch(pauseWebhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: adminToken,
+        sessionKey,
+        customerId,
+        minutes,
+        reason,
+        status: "paused",
+        pausedUntil: expiresAt,
+        createdAt: new Date().toISOString(),
+      }),
+    });
+  } catch (error) {
+    console.error("Persist pause webhook failed:", error);
+  }
 }
 
 function requireAdmin(req, res) {
@@ -487,6 +864,10 @@ app.get("/debug", (_req, res) => {
     gameDataUrl,
     gameDataCacheMs,
     gameDataFetchTimeoutMs,
+    pauseSheetId,
+    pauseSheetGid,
+    pauseSheetCacheMs,
+    pauseWebhookConfigured: Boolean(pauseWebhookUrl),
   });
 });
 
@@ -525,6 +906,18 @@ app.get("/admin/pauses", (req, res) => {
   res.json({ ok: true, pauses });
 });
 
+app.get("/admin/pause-sheet", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  try {
+    const rows = await loadPauseSheetRows();
+    res.json({ ok: true, rows });
+  } catch (error) {
+    console.error("Pause sheet endpoint failed:", error);
+    res.status(500).json({ ok: false, error: "Pause sheet lookup failed" });
+  }
+});
+
 app.post("/admin/pause", (req, res) => {
   if (!requireAdmin(req, res)) return;
 
@@ -538,6 +931,12 @@ app.post("/admin/pause", (req, res) => {
 
   const expiresAt = minutes > 0 ? Date.now() + minutes * 60 * 1000 : 0;
   pausedSessions.set(sessionKey, { expiresAt, reason });
+  persistPauseToWebhook({
+    sessionKey,
+    customerId: sessionKey,
+    minutes,
+    reason,
+  });
   res.json({
     ok: true,
     sessionKey,
@@ -564,6 +963,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
   const customerText = queryResult.queryText || "";
   const intentName = queryResult.intent?.displayName || "";
   const sessionKey = getSessionKey(req);
+  const dialogflowSession = getDialogflowSession(req);
   const memory = getMemory(sessionKey);
   const today = getBangkokDateParts();
   const detectedDevice = extractDeviceName(customerText);
@@ -579,11 +979,34 @@ app.post("/dialogflow-webhook", async (req, res) => {
     text: customerText,
     isFallback: isFallbackIntent(intentName),
     sessionKey,
+    dialogflowSession,
     lastDevice: memory.lastDevice,
     shouldGreetToday,
   });
 
-  const activePause = getActivePause(sessionKey);
+  if (includesAdminRequest(customerText)) {
+    const answer = buildAdminPauseReply(customerText, shouldGreetToday);
+    const minutes = 120;
+    const expiresAt = Date.now() + minutes * 60 * 1000;
+
+    pausedSessions.set(sessionKey, {
+      expiresAt,
+      reason: "customer_requested_admin",
+    });
+
+    await persistPauseToWebhook({
+      sessionKey,
+      customerId: sessionKey,
+      minutes,
+      reason: "customer_requested_admin",
+    });
+
+    memory.greetedDate = today.dateKey;
+    updateRecentMessages(memory, customerText, answer);
+    return res.json(dialogflowText(answer));
+  }
+
+  const activePause = await getEffectivePause(sessionKey, dialogflowSession);
   if (activePause) {
     console.log("AI paused for session:", {
       sessionKey,
@@ -594,8 +1017,8 @@ app.post("/dialogflow-webhook", async (req, res) => {
     return res.json(pausedReplyText ? dialogflowText(pausedReplyText) : dialogflowEmpty());
   }
 
-  if (!isFallbackIntent(intentName)) {
-    return res.json(dialogflowText(queryResult.fulfillmentText || "รับทราบค่ะ"));
+  if (!isFallbackIntent(intentName) && queryResult.fulfillmentText) {
+    return res.json(dialogflowText(queryResult.fulfillmentText));
   }
 
   if (!customerText.trim()) {
@@ -603,6 +1026,13 @@ app.post("/dialogflow-webhook", async (req, res) => {
   }
 
   try {
+    const deterministicAnswer = buildPriceAnswer(customerText, memory, shouldGreetToday);
+    if (deterministicAnswer) {
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, deterministicAnswer);
+      return res.json(dialogflowText(deterministicAnswer));
+    }
+
     const sessionContext = [
       `todayDateBangkok=${today.display}`,
       `todayWeekday=${today.weekday}`,

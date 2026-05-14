@@ -54,6 +54,11 @@ git push -u origin main
    - `GAME_DATA_FETCH_TIMEOUT_MS` = `3000`
    - `ADMIN_TOKEN` = ตั้งเป็นรหัสยาว ๆ เอง ใช้สำหรับ pause AI รายลูกค้า
    - `PAUSED_REPLY_TEXT` = เว้นว่างไว้ถ้าต้องการให้ AI เงียบตอน pause
+   - `PAUSE_SHEET_ID` = Google Sheet ID ที่ใช้เก็บ pause
+   - `PAUSE_SHEET_GID` = gid ของ worksheet `AI Pause` ถ้าต้องการให้ server อ่าน pause จากชีต
+   - `PAUSE_SHEET_CACHE_MS` = `30000`
+   - `PAUSE_SHEET_FETCH_TIMEOUT_MS` = `3000`
+   - `PAUSE_WEBHOOK_URL` = URL ของ Google Apps Script Web App สำหรับบันทึก pause ลงชีต
 7. กด Deploy
 
 หลัง deploy เสร็จ Render จะให้ URL ประมาณนี้:
@@ -198,12 +203,15 @@ Human Handoff
 
 ### วิธีที่ 3: ระบบ pause รายลูกค้า
 
-เวอร์ชันนี้มีระบบ pause รายลูกค้าแบบ in-memory แล้ว เหมาะสำหรับใช้งานทันทีบน Render instance เดียว
+เวอร์ชันนี้มีระบบ pause รายลูกค้า 2 ชั้น:
+
+1. pause ใน memory ใช้ได้ทันที
+2. pause ผ่าน Google Sheet ใช้เก็บและเช็คสถานะจากชีต
 
 ข้อควรรู้:
 
 - ถ้า Render restart/deploy ใหม่ รายการ pause จะหาย
-- ถ้าต้องการให้ pause อยู่ถาวร ต้องต่อ Google Sheet/Database เพิ่มในขั้นถัดไป
+- ถ้าตั้ง Google Sheet pause แล้ว รายการ pause จะถูกเก็บในชีตด้วย
 - ตอน pause ถ้า `PAUSED_REPLY_TEXT` ว่าง ระบบจะไม่ส่งข้อความตอบกลับ เพื่อให้แอดมินตอบเอง
 
 ก่อนใช้ ให้ตั้ง env:
@@ -212,6 +220,69 @@ Human Handoff
 ADMIN_TOKEN=ตั้งรหัสลับยาวๆเอง
 PAUSED_REPLY_TEXT=
 ```
+
+### ตั้ง Google Sheet Pause
+
+สร้าง worksheet ชื่อ:
+
+```text
+AI Pause
+```
+
+หัวตารางแถวแรก:
+
+```text
+CreatedAt | SessionKey | CustomerId | Status | PausedUntil | Reason
+```
+
+ค่า `Status` ที่ถือว่า pause:
+
+```text
+paused
+active
+true
+yes
+```
+
+ถ้าจะให้ server อ่าน pause จากชีต ให้ publish/export worksheet นี้ได้เหมือน Inventory แล้วใส่ env:
+
+```text
+PAUSE_SHEET_ID=Google Sheet ID
+PAUSE_SHEET_GID=gid ของ worksheet AI Pause
+```
+
+### ตั้ง Google Apps Script เพื่อบันทึก pause ลงชีต
+
+ใน repo มีไฟล์:
+
+```text
+google-apps-script-pause.gs
+```
+
+ให้เปิด Google Sheet → Extensions → Apps Script แล้ววางโค้ดนี้
+
+แก้บรรทัด:
+
+```js
+const ADMIN_TOKEN = "CHANGE_THIS_TO_THE_SAME_ADMIN_TOKEN_AS_RENDER";
+```
+
+ให้เป็นรหัสเดียวกับ `ADMIN_TOKEN` ใน Render
+
+จากนั้น Deploy → New deployment → Web app:
+
+```text
+Execute as: Me
+Who has access: Anyone
+```
+
+เอา Web App URL มาใส่ใน Render:
+
+```text
+PAUSE_WEBHOOK_URL=https://script.google.com/macros/s/xxxxx/exec
+```
+
+เมื่อ AI auto-pause เพราะลูกค้าพิมพ์หาแอดมิน ระบบจะยิง URL นี้เพื่อเพิ่มแถวใน Google Sheet ให้อัตโนมัติ
 
 หา `sessionKey` ได้จาก Render Logs หลังลูกค้าทักมา จะมีบรรทัด:
 
@@ -249,3 +320,25 @@ curl -X POST "https://your-service-name.onrender.com/admin/resume" \
 ```text
 PAUSED_REPLY_TEXT=แอดมินกำลังเข้ามาดูแลให้นะครับ
 ```
+
+### Auto Pause จากคำว่าแอดมิน/คนจริง
+
+ถ้าลูกค้าพิมพ์ข้อความที่มีคำประมาณนี้:
+
+```text
+แอดมิน
+ขอคุยกับคนจริง
+ติดต่อพนักงาน
+admin
+human
+staff
+agent
+```
+
+ระบบจะตอบ:
+
+```text
+แอดมินจะเข้ามาดูแลให้นะครับ
+```
+
+แล้ว pause AI ของลูกค้าคนนั้นทันทีประมาณ 120 นาที

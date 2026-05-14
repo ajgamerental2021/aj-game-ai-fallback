@@ -31,6 +31,16 @@ services:
         sync: false
       - key: PAUSED_REPLY_TEXT
         value: ""
+      - key: PAUSE_SHEET_ID
+        value: 13QZWpd_E-L_0G_Xd0zSL5_OcgV4sdwk9febXZSkZepc
+      - key: PAUSE_SHEET_GID
+        value: ""
+      - key: PAUSE_SHEET_CACHE_MS
+        value: "30000"
+      - key: PAUSE_SHEET_FETCH_TIMEOUT_MS
+        value: "3000"
+      - key: PAUSE_WEBHOOK_URL
+        sync: false
   - type: cron
     name: line-dialogflow-ai-fallback-ping
     env: node
