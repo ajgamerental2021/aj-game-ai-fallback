@@ -474,11 +474,110 @@ function buildRentNowAnswer(customerText, shouldGreetToday) {
   return lines.filter(Boolean).join("\n");
 }
 
-function includesAvailabilityQuestion(text) {
+function includesNoContractIntent(text) {
   const value = normalizeSearchText(text);
-  return /เครื่องว่าง|มีเครื่อง|เครื่องพร้อม|ของว่าง|เครื่องเหลือ|in stock|available now|do you have (a |the )?(ps|xbox|switch|quest|console)/.test(
+  return /ไม่ทำสัญญา|ไม่อยากทำสัญญา|ไม่สะดวกทำสัญญา|ไม่ต้องการสัญญา|ไม่เอาสัญญา|ไม่เซ็นสัญญา|no contract|without contract|skip contract|ไม่แนบบัตร/.test(
     value,
   );
+}
+
+function isAffirmative(text) {
+  const value = normalizeSearchText(text);
+  return /^(โอเค|โอเก|ok|okay|ใช่|ตกลง|เอา|รับทราบ|จัดเลย|ได้|ได้ครับ|ได้ค่ะ|yes|y|yep|sure|confirm|ตามนั้น)\b/.test(value);
+}
+
+async function buildNoContractConfirmAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesNoContractIntent(customerText)) return "";
+  const english = isEnglishText(customerText);
+  const deviceName = memory.lastDevice;
+  if (!deviceName || !deviceRates.has(deviceName)) return "";
+  const rate = deviceRates.get(deviceName);
+  const newDeposit = rate.deposit === 4000 ? 8000 : 5000;
+  memory.noContractPending = true;
+  if (english) {
+    return [
+      shouldGreetToday ? "Hello 🎮✨" : "",
+      `📝 Rent ${deviceName} without a rental agreement?`,
+      `🔒 Deposit will be adjusted to ${formatMoney(newDeposit, true)} (instead of ${formatMoney(rate.deposit, true)})`,
+      "🙏 Reply OK or Yes to confirm, I'll re-quote the total.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [
+    shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+    `📝 ยืนยันเช่า ${deviceName} แบบไม่ทำสัญญาการเช่าใช่ไหมครับ?`,
+    `🔒 ค่าประกันจะปรับเป็น ${formatMoney(newDeposit)} (จากเดิม ${formatMoney(rate.deposit)})`,
+    "🙏 ตอบ โอเค หรือ ใช่ เพื่อยืนยัน เดี๋ยวสรุปยอดใหม่ให้ครับ",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function buildNoContractReissueAnswer(customerText, memory, shouldGreetToday) {
+  if (!memory.noContractPending) return "";
+  if (!isAffirmative(customerText)) return "";
+  const deviceName = memory.lastDevice;
+  const days = memory.lastRentalDays;
+  if (!deviceName || !deviceRates.has(deviceName) || !days) return "";
+  const english = isEnglishText(customerText);
+  const calc = calculateRental(deviceName, days, true, false);
+  if (!calc || calc.rentalFee == null) return "";
+  const startDate = memory.lastStartDate ? new Date(memory.lastStartDate) : null;
+  const returnDate = startDate ? addDays(startDate, days) : null;
+  memory.noContractPending = false;
+
+  const GAMES_LINK = "https://ajgamerental2021.github.io/ajconsole/game_index.html";
+  const gamesLines = english
+    ? ["✨ You can pick up to 10 games per rental", "📚 Browse all games:", `👉 ${GAMES_LINK}`]
+    : ["✨ ลูกค้าเลือกได้สูงสุด 10 เกม ต่อการเช่า 1 ครั้ง", "📚 ดูรายการเกมทั้งหมดและเลือกเกมได้ที่:", `👉 ${GAMES_LINK}`];
+  const warningLines = english
+    ? ["⚠️ Please send Google Maps location for admin to confirm delivery fee", "⚠️ Please read all rental terms carefully before transferring"]
+    : ["⚠️ แจ้งโลเคชั่นจัดส่งเป็นลิ้งค์ Google Maps เพื่อให้แอดมินเช็คค่าส่งด้วยนะครับ", "⚠️ รบกวนอ่านรายละเอียดการเช่าอย่างละเอียดก่อนโอนจอง"];
+
+  if (english) {
+    const groups = [];
+    if (shouldGreetToday) groups.push("Hello 🎮✨");
+    groups.push([
+      `📌 ${deviceName} for ${days} days (No contract)`,
+      `💰 Rental fee: ${formatMoney(calc.rentalFee, true)}`,
+      `🔒 Deposit: ${formatMoney(calc.deposit, true)} (refundable on return day)`,
+      `✅ Total: ${formatMoney(calc.total, true)}`,
+    ].join("\n"));
+    groups.push(["📝 Booking payment: 200 THB", `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`].join("\n"));
+    if (returnDate) groups.push(`📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`);
+    if (returnDate) groups.push(gamesLines.join("\n"));
+    groups.push(buildEnglishPaymentLines(calc, true));
+    groups.push(warningLines.join("\n"));
+    return groups.join("\n\n");
+  }
+
+  const groups = [];
+  if (shouldGreetToday) groups.push("สวัสดีครับ 🎮✨");
+  groups.push([
+    `📌 ${deviceName} เช่า ${days} วัน (ไม่ทำสัญญา)`,
+    `💰 ค่าเช่า: ${formatMoney(calc.rentalFee)}`,
+    `🔒 ค่าประกัน: ${formatMoney(calc.deposit)} ได้คืนวันคืนเครื่อง`,
+    `✅ รวมสุทธิ: ${formatMoney(calc.total)}`,
+  ].join("\n"));
+  groups.push(["📝 โอนจองคิว: 200 บาท", `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`].join("\n"));
+  if (returnDate) groups.push(`📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}`);
+  if (returnDate) groups.push(gamesLines.join("\n"));
+  groups.push(buildThaiPaymentLines(calc, true));
+  groups.push(warningLines.join("\n"));
+  return groups.join("\n\n");
+}
+
+function includesAvailabilityQuestion(text) {
+  const value = normalizeSearchText(text);
+  if (/เครื่องว่าง|มีเครื่อง|เครื่องพร้อม|ของว่าง|เครื่องเหลือ|in stock|available now|free now|do you have (a |the )?(ps|xbox|switch|quest|console|rog|legion|steam|meta|portal)/.test(value)) {
+    return true;
+  }
+  if (/ว่าง(ไหม|มั้ย|มัย|มะ)\b/.test(value)) return true;
+  if (/^ว่างไหม$|^ว่างมั้ย$|^ว่างหรอ$|^ว่างป่ะ$/.test(value)) return true;
+  if (/\b(available|free|vacant)\??$/.test(value)) return true;
+  if (/is\s+(ps|xbox|switch|quest|meta|rog|legion|steam|portal).*\b(available|free|in\s*stock)/.test(value)) return true;
+  return false;
 }
 
 async function buildAvailabilityAnswer(customerText, memory, shouldGreetToday) {
@@ -664,6 +763,9 @@ function buildAccountRentalAnswer(customerText, shouldGreetToday) {
 
 function includesTermsQuestion(text) {
   const value = normalizeSearchText(text);
+  if (/ไม่ทำสัญญา|ไม่อยากทำสัญญา|ไม่สะดวกทำสัญญา|ไม่ต้องการสัญญา|ไม่เอาสัญญา|ไม่เซ็นสัญญา|ไม่แนบบัตร|no contract|without contract|no id|without id|skip contract/.test(value)) {
+    return false;
+  }
   return /ข้อกำหนด|เงื่อนไข|กติกา|รายละเอียด|ต้องใช้อะไร|ใช้เอกสาร|มัดจำ|ประกัน|สัญญา|terms|condition|requirement|deposit|agreement/.test(
     value,
   );
@@ -810,8 +912,12 @@ function includesNoContractRequest(text) {
 function buildThaiPaymentLines(calc, noContract) {
   if (noContract) {
     return [
-      ["📝 กรณีไม่ทำสัญญาการเช่า", `🔒 ค่าประกันปรับเป็น: ${formatMoney(calc.deposit)}`].join("\n"),
-      ["🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท", "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง"].join("\n"),
+      ["🏦 ข้อมูลโอนจอง", "✅ เลขบัญชี: 8690576029", "✅ ธนาคาร: กรุงไทย", "✅ ชื่อบัญชี: สมชาย เหมศิริ"].join("\n"),
+      [
+        "❌ ลูกค้าไม่ทำสัญญาการเช่า",
+        "🚫 ยกเลิกโดยลูกค้า → ไม่คืนเงินจอง 200 บาท",
+        "🚫 คืนก่อนกำหนด → ไม่คืนเงินส่วนต่าง",
+      ].join("\n"),
     ].join("\n\n");
   }
 
@@ -829,8 +935,12 @@ function buildThaiPaymentLines(calc, noContract) {
 function buildEnglishPaymentLines(calc, noContract) {
   if (noContract) {
     return [
-      ["📝 No rental agreement option", `🔒 Adjusted deposit: ${formatMoney(calc.deposit, true)}`].join("\n"),
-      ["🚫 Customer cancellation → 200 THB booking payment is non-refundable", "🚫 Early return → unused rental difference is non-refundable"].join("\n"),
+      ["🏦 Bank details", "✅ Bank Acc No.: 8690576029", "✅ Bank Name: Krung Thai", "✅ Bank Acc Name: Somchai Hemsiri"].join("\n"),
+      [
+        "❌ Customer chose no rental agreement",
+        "🚫 Customer cancellation → 200 THB booking payment is non-refundable",
+        "🚫 Early return → unused rental difference is non-refundable",
+      ].join("\n"),
     ].join("\n\n");
   }
 
@@ -980,6 +1090,23 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
     ? ["⚠️ Please send Google Maps location for admin to confirm delivery fee", "⚠️ Please read all rental terms carefully before transferring"]
     : ["⚠️ แจ้งโลเคชั่นจัดส่งเป็นลิ้งค์ Google Maps เพื่อให้แอดมินเช็คค่าส่งด้วยนะครับ", "⚠️ รบกวนอ่านรายละเอียดการเช่าอย่างละเอียดก่อนโอนจอง"];
 
+  if (inventoryStatus && !inventoryStatus.available) {
+    if (english) {
+      const lines = [];
+      if (shouldGreetToday) lines.push("Hello 🎮✨");
+      lines.push(`⚠️ ${deviceName} is fully booked on ${formatDate(startDate, true)}`);
+      lines.push(inventoryStatus.nextDate ? `📅 Next available: ${inventoryStatus.nextDate}` : "📅 Admin will confirm queue shortly.");
+      lines.push("🙏 Would you like to book on the next available date instead?");
+      return lines.filter(Boolean).join("\n");
+    }
+    const lines = [];
+    if (shouldGreetToday) lines.push("สวัสดีครับ 🎮✨");
+    lines.push(`⚠️ ${deviceName} คิวเต็มในวันที่ ${formatDate(startDate)} ครับ`);
+    lines.push(inventoryStatus.nextDate ? `📅 คาดว่าว่างวันที่: ${inventoryStatus.nextDate}` : "📅 เดี๋ยวแอดมินยืนยันคิวอีกครั้งครับ");
+    lines.push("🙏 สนใจจองเป็นวันนั้นแทนไหมครับ?");
+    return lines.filter(Boolean).join("\n");
+  }
+
   if (english) {
     const groups = [];
     if (shouldGreetToday) groups.push("Hello 🎮✨");
@@ -998,12 +1125,6 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
     groups.push(keep(pay));
     if (returnDate) groups.push(`📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`);
     if (returnDate) groups.push(keep(gamesInfoLines));
-    if (inventoryStatus && !inventoryStatus.available) {
-      const nextDateLine = inventoryStatus.nextDate ? `📅 Next available: ${inventoryStatus.nextDate}` : "📅 Will confirm queue shortly.";
-      groups.push(keep([`⚠️ ${deviceName} is fully booked on ${formatDate(startDate, true)}`, nextDateLine, "🙏 Would you like to book on the next available date instead?"]));
-    } else if (inventoryStatus && inventoryStatus.available) {
-      groups.push(`✅ ${deviceName} is available on ${formatDate(startDate, true)}`);
-    }
     if (monthly) groups.push("ℹ️ Short-term rentals are usually daily/weekly, monthly available at this rate.");
     if (includePayment) groups.push(buildEnglishPaymentLines(calc, noContract));
     if (includePayment) groups.push(keep(warningLines));
@@ -1028,12 +1149,6 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   groups.push(keep(pay));
   if (returnDate) groups.push(`📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}`);
   if (returnDate) groups.push(keep(gamesInfoLines));
-  if (inventoryStatus && !inventoryStatus.available) {
-    const nextDateLine = inventoryStatus.nextDate ? `📅 คาดว่าว่างวันที่: ${inventoryStatus.nextDate}` : "📅 เดี๋ยวแอดมินยืนยันคิวอีกครั้งครับ";
-    groups.push(keep([`⚠️ ${deviceName} คิวเต็มในวันที่ ${formatDate(startDate)} ครับ`, nextDateLine, "🙏 สนใจจองเป็นวันนั้นแทนไหมครับ?"]));
-  } else if (inventoryStatus && inventoryStatus.available) {
-    groups.push(`✅ ${deviceName} ว่างวันที่ ${formatDate(startDate)} ครับ`);
-  }
   if (monthly) groups.push("ℹ️ ปกติเช่าระยะสั้นรายวัน/รายสัปดาห์ แต่มีเรทรายเดือนตามนี้ครับ");
   if (includePayment) groups.push(buildThaiPaymentLines(calc, noContract));
   if (includePayment) groups.push(keep(warningLines));
@@ -2742,6 +2857,24 @@ app.post("/dialogflow-webhook", async (req, res) => {
         minutes,
         reason: "gameplay_howto_handoff",
       });
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer, sessionKey);
+      return res.json(dialogflowText(answer));
+    }
+
+    const noContractReissue = await buildNoContractReissueAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (noContractReissue) {
+      answerBlocks.push(noContractReissue);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer, sessionKey);
+      return res.json(dialogflowText(answer));
+    }
+
+    const noContractConfirm = await buildNoContractConfirmAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (noContractConfirm) {
+      answerBlocks.push(noContractConfirm);
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, answer, sessionKey);
