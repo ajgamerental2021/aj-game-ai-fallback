@@ -886,6 +886,54 @@ function includesTermsQuestion(text) {
   );
 }
 
+function includesGeneralRentalQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธีเช่า|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า/.test(
+    value,
+  );
+}
+
+function buildGeneralRentalInfoAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesGeneralRentalQuestion(customerText)) return "";
+  if (extractDeviceName(customerText)) return "";
+  const english = isEnglishText(customerText);
+  const deviceList = [...deviceRates.keys()];
+  if (english) {
+    return [
+      shouldGreetToday ? "Hello 🎮✨" : "",
+      "🎮 We have these consoles available for rent:",
+      deviceList.map((d) => `🔹 ${d}`).join("\n"),
+      "",
+      "📋 To quote your rental, please tell me:",
+      "1️⃣ Which device you want",
+      "2️⃣ Start date",
+      "3️⃣ Number of days",
+      "4️⃣ Delivery location (Google Maps link)",
+      "",
+      "📝 A rental agreement is required (or extra deposit if you skip it).",
+      "🙏 Send the details and I'll calculate the total right away!",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [
+    shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+    "🎮 ทางร้านมีเครื่องให้เช่าตามนี้ครับ:",
+    deviceList.map((d) => `🔹 ${d}`).join("\n"),
+    "",
+    "📋 ขอข้อมูลเพื่อคำนวณค่าเช่าครับ:",
+    "1️⃣ เครื่องที่ต้องการเช่า",
+    "2️⃣ วันที่เริ่มเช่า",
+    "3️⃣ จำนวนวัน",
+    "4️⃣ สถานที่จัดส่ง (ลิ้งค์ Google Maps)",
+    "",
+    "📝 การเช่ามีทำสัญญาการเช่าด้วยครับ (หรือเพิ่มค่าประกันถ้าไม่ทำสัญญา)",
+    "🙏 แจ้งรายละเอียดมาได้เลย เดี๋ยวคำนวณยอดให้ทันทีครับ",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function includesContractDocQuestion(text) {
   const value = normalizeSearchText(text);
   if (/ไม่[ก-๙ ]{0,14}สัญญา/.test(value)) return false;
@@ -1152,20 +1200,25 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   const deviceName = extractDeviceName(customerText) || memory.lastDevice;
 
   if (!deviceName || !deviceRates.has(deviceName)) {
+    const deviceList = [...deviceRates.keys()];
     return english
       ? [
           shouldGreetToday ? "Hello 🎮✨" : "",
-          "Which device would you like to rent?",
+          "🎮 We have these consoles available for rent:",
+          deviceList.map((d) => `🔹 ${d}`).join("\n"),
           "",
-          "Please tell me the model, for example PS5, PS5 Pro, Nintendo Switch 2, or Meta Quest 3.",
+          "📋 Please tell me: device, start date, number of days, delivery location.",
+          "📝 A rental agreement is required (or extra deposit if skipped).",
         ]
           .filter(Boolean)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
-          "สนใจเช่าเครื่องรุ่นไหนครับ?",
+          "🎮 ทางร้านมีเครื่องให้เช่าตามนี้ครับ:",
+          deviceList.map((d) => `🔹 ${d}`).join("\n"),
           "",
-          "แจ้งชื่อเครื่องได้เลย เช่น PS5, PS5 Pro, Nintendo Switch 2 หรือ Meta Quest 3 ครับ",
+          "📋 รบกวนแจ้ง: เครื่องที่ต้องการ, วันที่เริ่มเช่า, จำนวนวัน, สถานที่จัดส่งครับ",
+          "📝 การเช่ามีทำสัญญาการเช่าด้วย (หรือเพิ่มค่าประกันถ้าไม่ทำสัญญา)",
         ]
           .filter(Boolean)
           .join("\n");
@@ -1715,7 +1768,8 @@ function includesGameQuestion(text) {
     includesGameplayHowToQuestion(text) ||
     includesIncludedGamesQuestion(text) ||
     includesAvailabilityQuestion(text) ||
-    includesContractDocQuestion(text)
+    includesContractDocQuestion(text) ||
+    includesGeneralRentalQuestion(text)
   ) {
     return false;
   }
@@ -3191,6 +3245,15 @@ app.post("/dialogflow-webhook", async (req, res) => {
     const contractDocAnswer = buildContractDocAnswer(customerText, memory, shouldGreetForNextBlock());
     if (contractDocAnswer) {
       answerBlocks.push(contractDocAnswer);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer, sessionKey);
+      return res.json(dialogflowText(answer));
+    }
+
+    const generalRentalAnswer = buildGeneralRentalInfoAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (generalRentalAnswer) {
+      answerBlocks.push(generalRentalAnswer);
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, answer, sessionKey);
