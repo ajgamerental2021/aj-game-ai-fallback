@@ -3708,12 +3708,14 @@ app.post("/dialogflow-webhook", async (req, res) => {
       }
 
       if (!longTermAnswer && !returnAnswer && !extensionAnswer) {
-        const summaryBefore = memory.summarySent;
+        const summarySentBefore = memory.summarySent;
         const priceAnswer = await buildPriceAnswer(customerText, memory, shouldGreetForNextBlock());
         if (priceAnswer) {
           answerBlocks.push(priceAnswer);
           memory.lastAnswerType = "price";
-          if (!summaryBefore && memory.summarySent) {
+          // Fire booking_summary whenever a full summary (with a start date) is produced.
+          const issuedFullSummary = memory.summarySent && Boolean(extractStartDate(customerText) || memory.lastStartDate);
+          if (issuedFullSummary && (!summarySentBefore || extractStartDate(customerText))) {
             notifyEvent("booking_summary", {
               sessionKey,
               device: memory.lastDevice,
