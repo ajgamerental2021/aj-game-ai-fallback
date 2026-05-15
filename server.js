@@ -200,6 +200,12 @@ function beautifyReply(text) {
     .trim();
 }
 
+// Keep intentional blank-line strings ("") but drop false/null/undefined.
+// Used for joining answer line arrays so section spacing is preserved.
+function lineKeep(line) {
+  return line !== false && line !== null && line !== undefined;
+}
+
 function getBangkokDateParts() {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Bangkok",
@@ -364,7 +370,7 @@ function buildAmbiguousDeviceAnswer(token, english, shouldGreetToday) {
     lines.push("");
     lines.push(english ? "🙏 Tell me the model and how many days." : "🙏 แจ้งรุ่นและจำนวนวันได้เลยครับ");
   }
-  return lines.filter(Boolean).join("\n");
+  return lines.filter(lineKeep).join("\n");
 }
 
 function updateRecentMessages(memory, customerText, answer = "", sessionKey = "") {
@@ -557,7 +563,7 @@ function buildDeliveryTimeAnswer(customerText, shouldGreetToday) {
       "",
       "🙏 Tell me the device and I can estimate more precisely.",
     ]
-      .filter(Boolean)
+      .filter(lineKeep)
       .join("\n");
   }
   return [
@@ -574,7 +580,7 @@ function buildDeliveryTimeAnswer(customerText, shouldGreetToday) {
     "",
     "🙏 แจ้งรุ่นเครื่องมาได้เลย เดี๋ยวประเมินเวลาให้แม่นขึ้นครับ",
   ]
-    .filter(Boolean)
+    .filter(lineKeep)
     .join("\n");
 }
 
@@ -599,7 +605,7 @@ function buildRentNowAnswer(customerText, shouldGreetToday) {
     lines.push(english ? "🚚 Next delivery available tomorrow 10:00 - 18:00." : "🚚 จัดส่งได้อีกทีพรุ่งนี้ ตั้งแต่ 10:00 - 18:00 เป็นต้นไปครับ");
     lines.push(english ? "🙏 Interested in booking for tomorrow? Just tell me 😊" : "🙏 สนใจจองเป็นพรุ่งนี้ แจ้งได้เลยครับ 😊");
   }
-  return lines.filter(Boolean).join("\n");
+  return lines.filter(lineKeep).join("\n");
 }
 
 function includesBookingIntent(text) {
@@ -658,7 +664,7 @@ async function buildPendingNextDateAnswer(customerText, memory, shouldGreetToday
     if (!days) lines.push("📅 How many days would you like to rent?");
     lines.push("📍 Please share Google Maps link so admin can confirm delivery fee.");
     if (days) lines.push("🙏 I'll prepare the full summary once I have the location.");
-    return lines.filter(Boolean).join("\n");
+    return lines.filter(lineKeep).join("\n");
   }
   const lines = [];
   if (shouldGreetToday) lines.push("สวัสดีครับ 🎮✨");
@@ -666,7 +672,7 @@ async function buildPendingNextDateAnswer(customerText, memory, shouldGreetToday
   if (!days) lines.push("📅 เช่าจำนวนกี่วันครับ?");
   lines.push("📍 รบกวนส่งลิ้งค์ Google Maps จุดจัดส่ง เพื่อให้แอดมินเช็คค่าส่งด้วยครับ");
   if (days) lines.push("🙏 ได้ลิ้งค์แล้ว เดี๋ยวสรุปรายละเอียดให้อีกครั้งครับ");
-  return lines.filter(Boolean).join("\n");
+  return lines.filter(lineKeep).join("\n");
 }
 
 function includesNoContractIntent(text) {
@@ -699,7 +705,7 @@ async function buildNoContractConfirmAnswer(customerText, memory, shouldGreetTod
       `🔒 Deposit will be adjusted to ${formatMoney(newDeposit, true)} (instead of ${formatMoney(rate.deposit, true)})`,
       "🙏 Reply OK or Yes to confirm, I'll re-quote the total.",
     ]
-      .filter(Boolean)
+      .filter(lineKeep)
       .join("\n");
   }
   return [
@@ -708,7 +714,7 @@ async function buildNoContractConfirmAnswer(customerText, memory, shouldGreetTod
     `🔒 ค่าประกันจะปรับเป็น ${formatMoney(newDeposit)} (จากเดิม ${formatMoney(rate.deposit)})`,
     "🙏 ตอบ โอเค หรือ ใช่ เพื่อยืนยัน เดี๋ยวสรุปยอดใหม่ให้ครับ",
   ]
-    .filter(Boolean)
+    .filter(lineKeep)
     .join("\n");
 }
 
@@ -794,13 +800,13 @@ async function buildAvailabilityAnswer(customerText, memory, shouldGreetToday) {
   if (!deviceName) {
     lines.push(english ? "📦 Which model do you want to check?" : "📦 อยากเช็คเครื่องรุ่นไหนครับ?");
     lines.push(english ? "Tell me the model, e.g. PS5, PS5 Pro, Switch 2." : "แจ้งชื่อเครื่อง เช่น PS5, PS5 Pro, Switch 2 ได้เลยครับ");
-    return lines.filter(Boolean).join("\n");
+    return lines.filter(lineKeep).join("\n");
   }
   const lineForDevice = summary.split("\n").find((l) => l.toLowerCase().includes(deviceName.toLowerCase()));
   if (!lineForDevice) {
     lines.push(english ? `📦 Let me check ${deviceName} queue for you.` : `📦 เดี๋ยวเช็คคิว ${deviceName} ให้ครับ`);
     lines.push(english ? "🙏 Admin will confirm shortly." : "🙏 สักครู่แอดมินยืนยันให้นะครับ");
-    return lines.filter(Boolean).join("\n");
+    return lines.filter(lineKeep).join("\n");
   }
   const isAvailable = /available/i.test(lineForDevice) && !/not available/i.test(lineForDevice);
   if (isAvailable) {
@@ -813,7 +819,7 @@ async function buildAvailabilityAnswer(customerText, memory, shouldGreetToday) {
     if (nextDate) lines.push(english ? `📅 Next available: ${nextDate}` : `📅 คาดว่าว่างวันที่: ${nextDate}`);
     lines.push(english ? "🙏 Admin will confirm exact queue, please wait a moment." : "🙏 เดี๋ยวแอดมินยืนยันคิวอีกครั้งครับ");
   }
-  return lines.filter(Boolean).join("\n");
+  return lines.filter(lineKeep).join("\n");
 }
 
 function includesOutOfAreaQuestion(text) {
@@ -831,14 +837,14 @@ function buildOutOfAreaAnswer(customerText, shouldGreetToday) {
         "🙏 Sorry, we only deliver in Bangkok & metro area (BMR)",
         "📍 If you're in BMR, please share a Google Maps link to confirm delivery fee.",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
         "🙏 ขออภัยครับ ทางร้านส่งเฉพาะ กรุงเทพ-ปริมณฑล",
         "📍 ถ้าอยู่ในเขตปริมณฑล แจ้งพิกัด Google Maps มาเช็คค่าส่งได้ครับ",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -858,14 +864,14 @@ function buildPaymentSlipAnswer(customerText, shouldGreetToday) {
         "✅ Got it! Thank you for the payment 🙏",
         "👨‍💼 Admin will verify the slip and confirm the booking shortly.",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🙏" : "",
         "✅ รับเรื่องครับ ขอบคุณที่โอนนะครับ 🙏",
         "👨‍💼 เดี๋ยวแอดมินช่วยเช็คสลิปและยืนยันคิวให้ครับ",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -911,7 +917,7 @@ function buildIncludedGamesAnswer(customerText, memory, shouldGreetToday) {
         "",
         "🙏 Just send me the game names you want, I'll prepare them.",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -923,7 +929,7 @@ function buildIncludedGamesAnswer(customerText, memory, shouldGreetToday) {
         "",
         "🙏 แจ้งชื่อเกมที่อยากได้มาเลย เดี๋ยวจัดเตรียมให้ครับ",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -945,7 +951,7 @@ function buildAccountRentalAnswer(customerText, shouldGreetToday) {
         "",
         "🙏 Need admin to double-check? Just let me know.",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -956,7 +962,7 @@ function buildAccountRentalAnswer(customerText, shouldGreetToday) {
         "",
         "🙏 ถ้าต้องการให้แอดมินช่วยเช็คเพิ่ม แจ้งได้เลยครับ",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -988,7 +994,7 @@ function buildDepositRefundAnswer(customerText, shouldGreetToday) {
       "✅ Once we receive the device and finish checking it, we transfer the deposit back",
       "✅ Refunded to the bank account on the rental agreement (or the one you provide)",
     ]
-      .filter(Boolean)
+      .filter(lineKeep)
       .join("\n");
   }
   return [
@@ -998,7 +1004,7 @@ function buildDepositRefundAnswer(customerText, shouldGreetToday) {
     "✅ เมื่อทางร้านได้รับเครื่องและเช็คเครื่องเรียบร้อย จะโอนคืนค่าประกันให้",
     "✅ โอนคืนเข้าบัญชีที่ทำสัญญาการเช่าไว้ หรือบัญชีที่ลูกค้าแจ้งมา",
   ]
-    .filter(Boolean)
+    .filter(lineKeep)
     .join("\n");
 }
 
@@ -1015,10 +1021,10 @@ function buildGameSelectionAnswer(customerText, memory, shouldGreetToday) {
   if (memory.summarySent) {
     return english
       ? [shouldGreetToday ? "Hello 🎮✨" : "", "✅ Noted! We'll prepare the games you selected before delivery 🎮"]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [shouldGreetToday ? "สวัสดีครับ 🎮✨" : "", "✅ รับทราบครับ ทางร้านจะเตรียมเกมที่เลือกไว้ให้ก่อนจัดส่งเครื่องครับผม 🎮"]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
   const missing = [];
@@ -1034,7 +1040,7 @@ function buildGameSelectionAnswer(customerText, memory, shouldGreetToday) {
       "🙏 To prepare your rental, could you tell me:",
       ["📋 Which device", "📅 Start date", "🗓️ Number of days", "📍 Delivery location (Google Maps link)"].join("\n"),
     ]
-      .filter(Boolean)
+      .filter(lineKeep)
       .join("\n");
   }
   return [
@@ -1044,7 +1050,7 @@ function buildGameSelectionAnswer(customerText, memory, shouldGreetToday) {
     "🙏 ขอทราบรายละเอียดการเช่าเพิ่มครับ:",
     ["📋 เครื่องที่ต้องการเช่า", "📅 วันที่เริ่มเช่า", "🗓️ จำนวนวัน", "📍 สถานที่จัดส่ง (ลิ้งค์ Google Maps)"].join("\n"),
   ]
-    .filter(Boolean)
+    .filter(lineKeep)
     .join("\n");
 }
 
@@ -1070,7 +1076,7 @@ function buildRecommendationAnswer(customerText, memory, shouldGreetToday) {
       "",
       "😊 Just tell me which style suits you.",
     ]
-      .filter(Boolean)
+      .filter(lineKeep)
       .join("\n");
   }
   return [
@@ -1083,7 +1089,7 @@ function buildRecommendationAnswer(customerText, memory, shouldGreetToday) {
     "",
     "😊 แจ้งแนวที่ชอบมาได้เลยครับ",
   ]
-    .filter(Boolean)
+    .filter(lineKeep)
     .join("\n");
 }
 
@@ -1250,7 +1256,7 @@ function buildContractDocAnswer(customerText, memory, shouldGreetToday) {
       "",
       "🙏 Any questions, just let me know.",
     ]
-      .filter(Boolean)
+      .filter(lineKeep)
       .join("\n");
   }
   return [
@@ -1268,7 +1274,7 @@ function buildContractDocAnswer(customerText, memory, shouldGreetToday) {
     "",
     "🙏 มีข้อสงสัยเพิ่มเติม แจ้งได้เลยครับ",
   ]
-    .filter(Boolean)
+    .filter(lineKeep)
     .join("\n");
 }
 
@@ -1289,7 +1295,7 @@ function buildTermsAnswer(customerText, shouldGreetToday) {
         "",
         "If you skip the rental agreement, deposit increases (5,000 / 8,000 THB depending on device).",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1304,7 +1310,7 @@ function buildTermsAnswer(customerText, shouldGreetToday) {
         "",
         "ถ้าไม่ทำสัญญา ค่าประกันปรับเป็น 5,000 / 8,000 บาท แล้วแต่รุ่นเครื่องครับ",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -1332,7 +1338,7 @@ function buildPromotionAnswer(customerText, shouldGreetToday) {
         "",
         "Deposit and delivery fee differences are not discounted.",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1347,7 +1353,7 @@ function buildPromotionAnswer(customerText, shouldGreetToday) {
         "",
         "หมายเหตุ: ส่วนลดคิดจากค่าเช่า ไม่รวมค่าประกันและส่วนต่างค่าส่งครับ ✅",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -1361,7 +1367,7 @@ function buildPurchasePauseReply(customerText, shouldGreetToday) {
         "",
         "I’ll pause the automated reply now so our team can continue directly. ✅",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 👋" : "",
@@ -1369,7 +1375,7 @@ function buildPurchasePauseReply(customerText, shouldGreetToday) {
         "",
         "ระบบจะพักการตอบอัตโนมัติไว้ก่อน เพื่อให้แอดมินคุยต่อโดยตรงครับ ✅",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -1516,7 +1522,7 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           "",
           "Please tell me how many days you would like to rent, and I can calculate the total for you.",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1530,7 +1536,7 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           "",
           "แจ้งจำนวนวันที่ต้องการเช่าได้เลยครับ เดี๋ยวคำนวณยอดรวมให้ครับ ✅",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
 
@@ -1545,7 +1551,7 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           "",
           "For rentals longer than 7 days, admin will help confirm the best rate.",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1556,7 +1562,7 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
           "",
           "ถ้าเช่าเกิน 7 วัน เดี๋ยวแอดมินช่วยเช็คเรทราคาให้เหมาะที่สุดครับ ✅",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
 
@@ -1612,14 +1618,14 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
       lines.push(`⚠️ ${deviceName} is fully booked on ${formatDate(startDate, true)}`);
       lines.push(inventoryStatus.nextDate ? `📅 Next available: ${inventoryStatus.nextDate}` : "📅 Admin will confirm queue shortly.");
       lines.push("🙏 Would you like to book on the next available date instead?");
-      return lines.filter(Boolean).join("\n");
+      return lines.filter(lineKeep).join("\n");
     }
     const lines = [];
     if (shouldGreetToday) lines.push("สวัสดีครับ 🎮✨");
     lines.push(`⚠️ ${deviceName} คิวเต็มในวันที่ ${formatDate(startDate)} ครับ`);
     lines.push(inventoryStatus.nextDate ? `📅 คาดว่าว่างวันที่: ${inventoryStatus.nextDate}` : "📅 เดี๋ยวแอดมินยืนยันคิวอีกครั้งครับ");
     lines.push("🙏 สนใจจองเป็นวันนั้นแทนไหมครับ?");
-    return lines.filter(Boolean).join("\n");
+    return lines.filter(lineKeep).join("\n");
   }
 
   if (english) {
@@ -1689,7 +1695,7 @@ function buildLongTermRentalAnswer(customerText, memory, shouldGreetToday, force
           "",
           "Please send the device model and rental start date, then admin can check the queue and confirm the monthly booking.",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1699,7 +1705,7 @@ function buildLongTermRentalAnswer(customerText, memory, shouldGreetToday, force
           "",
           "แจ้งชื่อเครื่องและวันที่เริ่มเช่าได้เลยครับ เดี๋ยวช่วยเช็คคิวและสรุปรายเดือนให้ครับ ✅",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
 
@@ -1782,7 +1788,7 @@ function buildBusinessRentalAnswer(customerText, memory, shouldGreetToday) {
         "🏢 Company name",
         "📍 Google Maps link for delivery fee check",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1800,7 +1806,7 @@ function buildBusinessRentalAnswer(customerText, memory, shouldGreetToday) {
         "🏢 ชื่อบริษัท",
         "📍 ลิงก์ Google Maps เพื่อเช็คค่าส่ง",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -1829,7 +1835,7 @@ function buildReturnAnswer(customerText, shouldGreetToday) {
         "",
         "If you want the deposit refunded immediately, the return location needs a TV and/or power outlet so we can check the device first.",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1841,7 +1847,7 @@ function buildReturnAnswer(customerText, shouldGreetToday) {
         "",
         "ถ้าต้องการรับค่าประกันคืนทันที จุดคืนต้องมีทีวีและ/หรือปลั๊กไฟ เพื่อให้ตรวจเช็คเครื่องก่อนคืนเงินครับ 🔒✨",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -1860,7 +1866,7 @@ function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
           "",
           "Please tell me the device model and how many more days you want to extend.",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1868,7 +1874,7 @@ function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
           "",
           "แจ้งชื่อเครื่องและจำนวนวันที่ต้องการเช่าต่อได้เลยครับ 🎮✨",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
 
@@ -1884,7 +1890,7 @@ function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
           "",
           "Returning customer extension gets 10% off the rental fee. ✅",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1894,7 +1900,7 @@ function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
           "",
           "ค่าเช่าต่อจะคิดส่วนลดลูกค้าเก่า 10% จากค่าเช่าครับ ✅",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
 
@@ -1907,7 +1913,7 @@ function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
           "",
           "For this duration, admin will help confirm the best rate for you.",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1915,7 +1921,7 @@ function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
           "",
           "จำนวนวันนี้ให้แอดมินช่วยเช็คเรทราคาที่เหมาะที่สุดให้นะครับ ✅",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
 
@@ -1940,7 +1946,7 @@ function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
         "✅ Bank Name: Krung Thai",
         "✅ Bank Acc Name: Somchai Hemsiri",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -1957,7 +1963,7 @@ function buildExtensionAnswer(customerText, memory, shouldGreetToday) {
         "✅ ธนาคาร: กรุงไทย",
         "✅ ชื่อบัญชี: สมชาย เหมศิริ",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -1977,7 +1983,7 @@ function buildAdminPauseReply(customerText, shouldGreetToday) {
         "",
         "I’ll pause the automated reply now so our team can continue the conversation directly.",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 👋" : "",
@@ -1985,7 +1991,7 @@ function buildAdminPauseReply(customerText, shouldGreetToday) {
         "",
         "ระบบจะพักการตอบอัตโนมัติไว้ก่อน เพื่อให้แอดมินคุยต่อโดยตรงครับ ✅",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -2031,13 +2037,13 @@ function buildGameplayHowToAnswer(customerText, shouldGreetToday) {
         shouldGreetToday ? "Hello 🎮✨" : "",
         "🙏 One moment, admin will come help you shortly 😊",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
         "🙏 สักครู่จะมีแอดมินเข้ามาดูแลนะครับ 😊",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -2296,7 +2302,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
           "You can also browse all games here:",
           "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -2305,7 +2311,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
           "หรือเลือกดูเกมทั้งหมดได้ที่ลิงก์นี้เลยครับ",
           "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
 
@@ -2321,7 +2327,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
           "",
           "If you want, admin can help double-check it for you.",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n")
       : [
           shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -2332,7 +2338,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
           "",
           "ถ้าต้องการให้แอดมินช่วยเช็คซ้ำ แจ้งได้เลยครับ 🎮✨",
         ]
-          .filter(Boolean)
+          .filter(lineKeep)
           .join("\n");
   }
 
@@ -2358,7 +2364,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
         "You can browse and choose games here:",
         "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -2369,7 +2375,7 @@ function buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetToday)
         "สามารถเลือกเกมทั้งหมดได้ที่ลิงก์นี้เลยครับ",
         "👉 https://ajgamerental2021.github.io/ajconsole/game_index.html",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
@@ -2387,7 +2393,7 @@ function buildGameLookupUnavailableAnswer(customerText, shouldGreetToday) {
         "",
         "Admin can also help double-check the title for you.",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n")
     : [
         shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
@@ -2398,7 +2404,7 @@ function buildGameLookupUnavailableAnswer(customerText, shouldGreetToday) {
         "",
         "ถ้าต้องการให้แอดมินช่วยเช็คชื่อเกมซ้ำ แจ้งได้เลยครับ 🎮✨",
       ]
-        .filter(Boolean)
+        .filter(lineKeep)
         .join("\n");
 }
 
