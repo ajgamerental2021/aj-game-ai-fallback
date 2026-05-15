@@ -632,7 +632,10 @@ function includesNoContractIntent(text) {
 
 function isAffirmative(text) {
   const value = normalizeSearchText(text);
-  return /^(โอเค|โอเก|โอเค ?(ไม่ทำ)?สัญญา|ok|okay|k|kk|ใช่|ใช่ครับ|ใช่ค่ะ|ตกลง|เอา|เอาครับ|เอาค่ะ|เอาเลย|รับทราบ|จัดเลย|ได้|ได้ครับ|ได้ค่ะ|yes|y|yep|yup|sure|confirm|confirmed|ตามนั้น|go ahead|proceed)\b/.test(value);
+  // No \b — Thai characters are not ASCII word chars so \b never matches after Thai words.
+  if (/^(โอเค|โอเก|โอเก|ตกลง|ใช่|เอาเลย|เอา|จัดเลย|รับทราบ|ตามนั้น|ได้เลย|ได้)/.test(value)) return true;
+  if (/^(ok|okay|kk|k|yes|yep|yup|sure|confirm|confirmed|go ahead|proceed)\b/.test(value)) return true;
+  return false;
 }
 
 async function buildNoContractConfirmAnswer(customerText, memory, shouldGreetToday) {
@@ -1102,7 +1105,7 @@ function buildRecommendationReply(customerText, memory, shouldGreetToday) {
 
 function includesGeneralRentalQuestion(text) {
   const value = normalizeSearchText(text);
-  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธี[ก-๙ ]{0,6}(เช่า|จอง)|ขั้นตอน[ก-๙ ]{0,6}(เช่า|จอง)|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|มีเครื่องอะไรให้เช่า|เครื่องอะไรให้เช่า|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า|อยากเช่าเครื่องเกม|อยากเช่าเครื่อง|สนใจเช่าเครื่อง|อยากได้เครื่องเกม|เช่าเครื่องเกม|want to rent (a |an )?(game|console)|looking to rent/.test(
+  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธี[ก-๙ ]{0,6}(เช่า|จอง)|ขั้นตอน[ก-๙ ]{0,6}(เช่า|จอง)|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|มีเครื่องอะไรให้เช่า|เครื่องอะไรให้เช่า|เช่ามีอะไร|อยากเช่ามีอะไร|มีอะไรบ้าง|มีอะไรให้เลือก|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า|อยากเช่าเครื่องเกม|อยากเช่าเครื่อง|สนใจเช่าเครื่อง|อยากได้เครื่องเกม|เช่าเครื่องเกม|want to rent (a |an )?(game|console)|looking to rent/.test(
     value,
   );
 }
