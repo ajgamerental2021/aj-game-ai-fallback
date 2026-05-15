@@ -2253,27 +2253,76 @@ function shouldUseLastGameQuery(customerText, memory) {
   return (hasDevice && asksGameFollowup) || asksPlatformFollowup;
 }
 
-function getActivePause(sessionKey) {
-  if (globalPause) {
-    if (globalPause.expiresAt && globalPause.expiresAt <= Date.now()) {
-      globalPause = null;
-      globalPauseExceptions.clear();
-      persistGlobalPauseToRedis().catch(() => {});
-      persistExemptionsToRedis().catch(() => {});
-    } else if (!globalPauseExceptions.has(sessionKey)) {
-      return { ...globalPause, scope: "global" };
+// ---- Pause storage: Redis is the source of truth, in-memory Map is a cache ----
+
+async function setPause(sessionKey, { minutes = defaultPauseMinutes, reason = "admin_takeover" } = {}) {
+  const expiresAt = minutes > 0 ? Date.now() + minutes * 60 * 1000 : 0;
+  const data = { expiresAt, reason };
+  pausedSessions.set(sessionKey, data);
+  if (redis) {
+    try {
+      const ttlSeconds = minutes > 0 ? Math.ceil(minutes * 60) : 30 * 24 * 60 * 60;
+      await redis.set(`pause:${sessionKey}`, data, { ex: ttlSeconds });
+    } catch (error) {
+      console.error("Redis setPause failed:", error);
+    }
+  }
+  return data;
+}
+
+async function clearPause(sessionKey) {
+  const existed = pausedSessions.has(sessionKey);
+  pausedSessions.delete(sessionKey);
+  if (redis) {
+    try {
+      await redis.del(`pause:${sessionKey}`);
+    } catch (error) {
+      console.error("Redis clearPause failed:", error);
+    }
+  }
+  return existed;
+}
+
+function getGlobalPauseForSession(sessionKey) {
+  if (!globalPause) return null;
+  if (globalPause.expiresAt && globalPause.expiresAt <= Date.now()) {
+    globalPause = null;
+    globalPauseExceptions.clear();
+    persistGlobalPauseToRedis().catch(() => {});
+    persistExemptionsToRedis().catch(() => {});
+    return null;
+  }
+  if (globalPauseExceptions.has(sessionKey)) return null;
+  return { ...globalPause, scope: "global" };
+}
+
+async function getActivePause(sessionKey) {
+  const global = getGlobalPauseForSession(sessionKey);
+  if (global) return global;
+
+  let pause = pausedSessions.get(sessionKey);
+  if (pause && pause.expiresAt && pause.expiresAt <= Date.now()) {
+    pausedSessions.delete(sessionKey);
+    pause = null;
+  }
+  if (pause) return pause;
+
+  if (redis) {
+    try {
+      const data = await redis.get(`pause:${sessionKey}`);
+      if (data && typeof data === "object") {
+        if (!data.expiresAt || data.expiresAt > Date.now()) {
+          pausedSessions.set(sessionKey, data);
+          return data;
+        }
+        await redis.del(`pause:${sessionKey}`);
+      }
+    } catch (error) {
+      console.error("Redis getActivePause failed:", error);
     }
   }
 
-  const pause = pausedSessions.get(sessionKey);
-  if (!pause) return null;
-
-  if (pause.expiresAt && pause.expiresAt <= Date.now()) {
-    pausedSessions.delete(sessionKey);
-    return null;
-  }
-
-  return pause;
+  return null;
 }
 
 function rememberSession({ sessionKey, dialogflowSession, customerText, intentName, memory }) {
@@ -2297,12 +2346,7 @@ function rememberSession({ sessionKey, dialogflowSession, customerText, intentNa
 }
 
 async function pauseSession({ sessionKey, customerId = "", minutes = defaultPauseMinutes, reason = "admin_takeover" }) {
-  const expiresAt = minutes > 0 ? Date.now() + minutes * 60 * 1000 : 0;
-
-  pausedSessions.set(sessionKey, {
-    expiresAt,
-    reason,
-  });
+  const data = await setPause(sessionKey, { minutes, reason });
 
   await persistPauseToWebhook({
     sessionKey,
@@ -2315,7 +2359,7 @@ async function pauseSession({ sessionKey, customerId = "", minutes = defaultPaus
     sessionKey,
     customerId: customerId || sessionKey,
     reason,
-    expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+    expiresAt: data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
   };
 }
 
@@ -2393,9 +2437,11 @@ async function getPauseFromSheet(sessionKey, customerId = "") {
 }
 
 async function getEffectivePause(sessionKey, customerId = "") {
-  const localPause = getActivePause(sessionKey);
-  if (localPause) return localPause;
+  const activePause = await getActivePause(sessionKey);
+  if (activePause) return activePause;
 
+  // Google Sheet pause is a legacy fallback used only when Redis is not configured.
+  if (redis || !pauseSheetGid) return null;
   try {
     return await getPauseFromSheet(sessionKey, customerId);
   } catch (error) {
@@ -2889,7 +2935,7 @@ app.get("/admin/pause-all", async (req, res) => {
     </body></html>`);
 });
 
-app.get("/admin/exempt", (req, res) => {
+app.get("/admin/exempt", async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const sessionKey = String(req.query.sessionKey || "").trim();
   const meta = '<meta name="viewport" content="width=device-width, initial-scale=1">';
@@ -2897,7 +2943,7 @@ app.get("/admin/exempt", (req, res) => {
     return res.status(400).type("html").send(`<html><head>${meta}</head><body style="font-family:-apple-system,sans-serif;padding:16px;"><h1>Missing sessionKey</h1></body></html>`);
   }
   globalPauseExceptions.add(sessionKey);
-  pausedSessions.delete(sessionKey);
+  await clearPause(sessionKey);
   persistExemptionsToRedis().catch(() => {});
   res.type("html").send(`<html><head>${meta}</head>
     <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;">
@@ -3014,7 +3060,7 @@ app.post("/admin/resume", async (req, res) => {
     return res.status(400).json({ ok: false, error: "sessionKey is required" });
   }
 
-  pausedSessions.delete(sessionKey);
+  await clearPause(sessionKey);
   await persistPauseToWebhook({
     sessionKey,
     customerId: sessionKey,
@@ -3035,34 +3081,36 @@ app.get("/admin/resume", async (req, res) => {
 
   if (!sessionKey) {
     const merged = new Map();
-    for (const [key, pause] of pausedSessions.entries()) {
+    const addEntry = (key, pause, source) => {
+      if (!key || merged.has(key)) return;
+      if (pause.expiresAt && pause.expiresAt <= now) return;
       merged.set(key, {
         sessionKey: key,
         reason: pause.reason || "",
         expiresAt: pause.expiresAt ? new Date(pause.expiresAt).toISOString() : null,
         remainingMinutes: pause.expiresAt ? Math.max(0, Math.round((pause.expiresAt - now) / 60000)) : null,
-        source: "memory",
+        source,
       });
-    }
-    try {
-      const rows = await loadPauseSheetRows();
-      for (const row of rows) {
-        const key = String(row.SessionKey || row.sessionKey || row.session || "").trim();
-        if (!key || merged.has(key)) continue;
-        const status = String(row.Status || row.status || "").trim().toLowerCase();
-        if (status && !["paused", "pause", "active", "true", "yes"].includes(status)) continue;
-        const until = parseDateTime(row.PausedUntil || row.pausedUntil || row.ExpiresAt || row.expiresAt);
-        if (until && until <= now) continue;
-        merged.set(key, {
-          sessionKey: key,
-          reason: String(row.Reason || row.reason || "pause_sheet"),
-          expiresAt: until ? new Date(until).toISOString() : null,
-          remainingMinutes: until ? Math.max(0, Math.round((until - now) / 60000)) : null,
-          source: "sheet",
-        });
+    };
+    // Redis is the source of truth — scan all pause:* keys
+    if (redis) {
+      try {
+        let cursor = "0";
+        do {
+          const [next, keys] = await redis.scan(cursor, { match: "pause:*", count: 100 });
+          cursor = next;
+          for (const redisKey of keys || []) {
+            const key = redisKey.replace(/^pause:/, "");
+            const data = await redis.get(redisKey);
+            if (data && typeof data === "object") addEntry(key, data, "redis");
+          }
+        } while (cursor !== "0");
+      } catch (error) {
+        console.error("Resume page: redis scan failed:", error);
       }
-    } catch (error) {
-      console.error("Resume page: pause sheet load failed:", error);
+    }
+    for (const [key, pause] of pausedSessions.entries()) {
+      addEntry(key, pause, "memory");
     }
     const pauses = [...merged.values()].sort((a, b) => (a.expiresAt || "").localeCompare(b.expiresAt || ""));
 
@@ -3100,8 +3148,7 @@ app.get("/admin/resume", async (req, res) => {
       </body></html>`);
   }
 
-  const existed = pausedSessions.has(sessionKey);
-  pausedSessions.delete(sessionKey);
+  const existed = await clearPause(sessionKey);
   await persistPauseToWebhook({
     sessionKey,
     customerId: sessionKey,
@@ -3156,20 +3203,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
 
   if (includesAdminRequest(customerText)) {
     const answer = buildAdminPauseReply(customerText, shouldGreetToday);
-    const minutes = 120;
-    const expiresAt = Date.now() + minutes * 60 * 1000;
-
-    pausedSessions.set(sessionKey, {
-      expiresAt,
-      reason: "customer_requested_admin",
-    });
-
-    await persistPauseToWebhook({
-      sessionKey,
-      customerId: sessionKey,
-      minutes,
-      reason: "customer_requested_admin",
-    });
+    await pauseSession({ sessionKey, customerId: sessionKey, minutes: 120, reason: "customer_requested_admin" });
 
     memory.greetedDate = today.dateKey;
     updateRecentMessages(memory, customerText, answer, sessionKey);
@@ -3178,20 +3212,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
 
   if (includesPurchaseQuestion(customerText)) {
     const answer = buildPurchasePauseReply(customerText, shouldGreetToday);
-    const minutes = 120;
-    const expiresAt = Date.now() + minutes * 60 * 1000;
-
-    pausedSessions.set(sessionKey, {
-      expiresAt,
-      reason: "purchase_or_sales_inquiry",
-    });
-
-    await persistPauseToWebhook({
-      sessionKey,
-      customerId: sessionKey,
-      minutes,
-      reason: "purchase_or_sales_inquiry",
-    });
+    await pauseSession({ sessionKey, customerId: sessionKey, minutes: 120, reason: "purchase_or_sales_inquiry" });
 
     memory.greetedDate = today.dateKey;
     updateRecentMessages(memory, customerText, answer, sessionKey);
@@ -3225,17 +3246,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
     const gameplayHowToAnswer = buildGameplayHowToAnswer(customerText, shouldGreetForNextBlock());
     if (gameplayHowToAnswer) {
       answerBlocks.push(gameplayHowToAnswer);
-      const minutes = 120;
-      pausedSessions.set(sessionKey, {
-        expiresAt: Date.now() + minutes * 60 * 1000,
-        reason: "gameplay_howto_handoff",
-      });
-      await persistPauseToWebhook({
-        sessionKey,
-        customerId: sessionKey,
-        minutes,
-        reason: "gameplay_howto_handoff",
-      });
+      await pauseSession({ sessionKey, customerId: sessionKey, minutes: 120, reason: "gameplay_howto_handoff" });
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, answer, sessionKey);
@@ -3299,17 +3310,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
     const paymentSlipAnswer = buildPaymentSlipAnswer(customerText, shouldGreetForNextBlock());
     if (paymentSlipAnswer) {
       answerBlocks.push(paymentSlipAnswer);
-      const minutes = 120;
-      pausedSessions.set(sessionKey, {
-        expiresAt: Date.now() + minutes * 60 * 1000,
-        reason: "payment_slip_handoff",
-      });
-      await persistPauseToWebhook({
-        sessionKey,
-        customerId: sessionKey,
-        minutes,
-        reason: "payment_slip_handoff",
-      });
+      await pauseSession({ sessionKey, customerId: sessionKey, minutes: 120, reason: "payment_slip_handoff" });
       const answer = answerBlocks.join("\n\n");
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, answer, sessionKey);
@@ -3466,17 +3467,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
               ? "🙏 One moment, admin will check this for you shortly 😊"
               : "🙏 สักครู่จะมีแอดมินเข้ามาช่วยเช็คให้นะครับ 😊";
             answerBlocks.push(handoff);
-            const minutes = 120;
-            pausedSessions.set(sessionKey, {
-              expiresAt: Date.now() + minutes * 60 * 1000,
-              reason: "game_not_found_handoff",
-            });
-            await persistPauseToWebhook({
-              sessionKey,
-              customerId: sessionKey,
-              minutes,
-              reason: "game_not_found_handoff",
-            });
+            await pauseSession({ sessionKey, customerId: sessionKey, minutes: 120, reason: "game_not_found_handoff" });
           } else {
             const gameAnswer = buildGameAnswerFromSummary(customerText, gameSummary, shouldGreetForNextBlock());
             if (gameAnswer) {
