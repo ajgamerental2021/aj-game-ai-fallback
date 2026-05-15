@@ -60,6 +60,51 @@ const recentSessions = new Map();
 let globalPause = null;
 const globalPauseExceptions = new Set();
 
+async function hydrateGlobalPauseFromRedis() {
+  if (!redis) return;
+  try {
+    const data = await redis.get("global_pause");
+    if (data && typeof data === "object") {
+      if (!data.expiresAt || data.expiresAt > Date.now()) {
+        globalPause = { expiresAt: data.expiresAt || 0, reason: data.reason || "global_admin_pause" };
+      } else {
+        await redis.del("global_pause");
+      }
+    }
+    const exemptions = await redis.smembers("global_pause_exceptions");
+    if (Array.isArray(exemptions)) {
+      exemptions.forEach((k) => globalPauseExceptions.add(k));
+    }
+  } catch (error) {
+    console.error("Redis hydrate global pause failed:", error);
+  }
+}
+
+async function persistGlobalPauseToRedis() {
+  if (!redis) return;
+  try {
+    if (globalPause) {
+      await redis.set("global_pause", globalPause);
+    } else {
+      await redis.del("global_pause");
+    }
+  } catch (error) {
+    console.error("Redis persist global pause failed:", error);
+  }
+}
+
+async function persistExemptionsToRedis() {
+  if (!redis) return;
+  try {
+    await redis.del("global_pause_exceptions");
+    if (globalPauseExceptions.size) {
+      await redis.sadd("global_pause_exceptions", ...globalPauseExceptions);
+    }
+  } catch (error) {
+    console.error("Redis persist exemptions failed:", error);
+  }
+}
+
 const deviceRates = new Map([
   ["PS4", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
   ["PS Portal", { daily: 300, weekly: 1500, monthly: 4000, deposit: 2000, category: "300" }],
@@ -1960,6 +2005,8 @@ function getActivePause(sessionKey) {
     if (globalPause.expiresAt && globalPause.expiresAt <= Date.now()) {
       globalPause = null;
       globalPauseExceptions.clear();
+      persistGlobalPauseToRedis().catch(() => {});
+      persistExemptionsToRedis().catch(() => {});
     } else if (!globalPauseExceptions.has(sessionKey)) {
       return { ...globalPause, scope: "global" };
     }
@@ -2566,6 +2613,7 @@ app.get("/admin/pause-all", async (req, res) => {
     expiresAt: minutes > 0 ? Date.now() + minutes * 60 * 1000 : 0,
     reason,
   };
+  await persistGlobalPauseToRedis();
   await persistPauseToWebhook({
     sessionKey: "*GLOBAL*",
     customerId: "*GLOBAL*",
@@ -2595,6 +2643,7 @@ app.get("/admin/exempt", (req, res) => {
   }
   globalPauseExceptions.add(sessionKey);
   pausedSessions.delete(sessionKey);
+  persistExemptionsToRedis().catch(() => {});
   res.type("html").send(`<html><head>${meta}</head>
     <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;">
       <h1>✅ AI ตอบเฉพาะคนนี้</h1>
@@ -2608,6 +2657,7 @@ app.get("/admin/unexempt", (req, res) => {
   if (!requireAdmin(req, res)) return;
   const sessionKey = String(req.query.sessionKey || "").trim();
   globalPauseExceptions.delete(sessionKey);
+  persistExemptionsToRedis().catch(() => {});
   const meta = '<meta name="viewport" content="width=device-width, initial-scale=1">';
   res.type("html").send(`<html><head>${meta}</head>
     <body style="font-family:-apple-system,sans-serif;line-height:1.5;padding:16px;">
@@ -2621,6 +2671,9 @@ app.get("/admin/resume-all", async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const was = Boolean(globalPause);
   globalPause = null;
+  globalPauseExceptions.clear();
+  await persistGlobalPauseToRedis();
+  await persistExemptionsToRedis();
   await persistPauseToWebhook({
     sessionKey: "*GLOBAL*",
     customerId: "*GLOBAL*",
@@ -3160,6 +3213,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
 });
 
 await loadKnowledgeBase();
+await hydrateGlobalPauseFromRedis();
 
 const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
