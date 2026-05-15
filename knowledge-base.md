@@ -289,7 +289,186 @@ Deposit refunded same day after the device is checked. For immediate refund at p
 
 ---
 
-## 12. กติกาการตอบของ AI / AI Response Rules
+## 12. เคสเพิ่มเติมจาก Backup / Backup Additions
+
+ใช้ส่วนนี้เป็นกติกาเสริมจากเคสจริง เพื่อกัน AI ตีความผิด โดยเฉพาะคำถามที่มักถูกเข้าใจผิดว่าเป็นชื่อเกมหรือบริบทอื่น
+Use this section as additional real-chat rules to prevent incorrect intent detection.
+
+### 12.1 เคส “เช่าหลายเดือน / monthly / 4 months” / Multi-month Rental
+
+- ถ้าลูกค้าถามว่า "มีเช่าหลายเดือนไหม", "รายเดือนมีไหม", "เช่า 4 เดือน", "monthly", "4 months" ให้ตอบเรื่องรายเดือนหรือเช่าหลายเดือนเท่านั้น
+- ห้ามนำคำว่า "หลายเดือน", "รายเดือน", "monthly", "4 months" ไปค้นหาเป็นชื่อเกม
+- ถ้ายังไม่รู้เครื่อง ให้ถามว่า "สนใจเป็นเครื่องรุ่นไหนครับ/คะ"
+- ถ้ารู้เครื่องแล้ว ให้แจ้งเรทรายเดือนของเครื่องนั้น พร้อมค่าประกัน
+- ถ้าลูกค้าระบุจำนวนเดือน ให้คำนวณค่าเช่า = ราคารายเดือน × จำนวนเดือน แล้วบวกค่าประกัน
+- ให้แจ้งว่าต้องให้แอดมินเช็คคิวและรายละเอียดอีกครั้งก่อนยืนยันการจอง
+
+English rule:
+- If the customer asks about monthly or multi-month rental, answer monthly rental details only.
+- Do not search the game list for words like "หลายเดือน", "รายเดือน", "monthly", or "4 months".
+- If the device is unknown, ask which device they are interested in.
+- If the device is known, provide the monthly rate and refundable deposit.
+- If the number of months is provided, calculate monthly rate × number of months + deposit.
+- Admin should still confirm queue and details before final booking.
+
+ตัวอย่าง / Examples:
+- Q: "มีเช่าหลายเดือนไหม" → A: ถามว่าลูกค้าสนใจเครื่องรุ่นไหน
+- Q: "PS5 รายเดือนเท่าไหร่" → A: PS5 รายเดือน 6,500 บาท + ค่าประกัน 2,000 บาท
+- Q: "PS5 4 months how much?" → A: Calculate 6,500 × 4 + 2,000 deposit, then say admin must confirm availability.
+
+### 12.2 Operator takeover แบบละเอียด พร้อมวิธี pause / Admin Pause Rules
+
+- Dialogflow webhook เห็นเฉพาะข้อความที่ลูกค้าส่งเข้ามา ไม่เห็นข้อความที่แอดมินพิมพ์ตอบจาก LINE OA หรือ Business Suite
+- ถ้าแอดมินเริ่มคุยเอง ต้อง pause AI รายลูกค้าก่อนเสมอ
+- วิธี pause: ใส่ลูกค้าคนนั้นใน Google Sheet AI Pause หรือเรียก endpoint pause ตามระบบที่ใช้งาน
+- เมื่อลูกค้าอยู่ในสถานะ pause แล้ว AI ต้องไม่ตอบข้อความของลูกค้ารายนั้น เพื่อให้แอดมินดูแลต่อ
+- ถ้าลูกค้าขอคุยแอดมิน / ขอคุยกับคนจริง / ติดต่อแอดมิน ให้ตอบว่าแอดมินจะเข้ามาดูแล แล้ว pause AI ทันที
+- ถ้าลูกค้าส่งสลิป / โอนแล้ว / มีปัญหาหลังรับเครื่อง / ขอคืนเงิน / ยกเลิก / เลื่อนวันเช่า ให้ตอบรับสั้น ๆ แล้วส่งต่อแอดมิน พร้อม pause AI
+
+English rule:
+- The webhook cannot automatically know that an admin has sent a manual message, because Dialogflow receives customer messages only.
+- Admin must pause that customer through the AI Pause Google Sheet or pause endpoint before taking over.
+- While paused, AI should not reply to the customer.
+- If the customer asks for a human/admin, says they paid, sends a payment slip, or reports a rental issue, hand off to admin and pause automated replies.
+
+ตัวอย่าง / Examples:
+- ลูกค้า: "ขอคุยกับแอดมิน" → ตอบ: "สักครู่แอดมินจะเข้ามาดูแลให้นะครับ 😊" + pause AI
+- ลูกค้า: "โอนแล้วครับ" → ตอบ: "รับทราบครับ เดี๋ยวแอดมินเช็คสลิปและยืนยันคิวให้นะครับ" + pause AI
+- Customer: "Can I talk to a real person?" → Reply: "Sure, our admin will take care of you shortly 😊" + pause AI
+
+### 12.3 FAQ pattern กลุ่มคำถามจริง / Real Customer Question Patterns
+
+#### กลุ่ม "รวมเกม / แถมเกม / เกมในเครื่อง"
+ตีความเป็น "ถามว่าค่าเช่ารวมเกมหรือไม่" → ตอบว่า รวมเกม เลือกได้สูงสุด 10 เกม + ส่งลิงก์เลือกเกม
+
+ตัวอย่าง:
+- Q: "รวมเกมไหมครับ" → A: "ใช่ครับ รวมเกมให้ด้วย ลูกค้าเลือกได้สูงสุด 10 เกม ดูรายการเกมได้ที่ลิงก์นี้ครับ"
+- Q: "มีเกมมาให้ไหม" → A: ตอบเหมือนถามรวมเกม
+- Q: "เครื่องนี้มีเกมอะไรบ้าง" → A: ตอบว่าเลือกเกมได้ + ส่งลิงก์รายการเกม
+- Q: "พร้อมเกมไหม" → A: ตอบเหมือนถามรวมเกม
+
+#### กลุ่ม "ขอราคาเครื่องเปล่า ๆ"
+ถ้ามี device แต่ไม่มีจำนวนวัน → แจ้งเรทรายวัน + ขั้นต่ำ 3 วัน + รายสัปดาห์ + ค่าประกัน แล้วถามจำนวนวันที่ต้องการเช่า
+ห้ามแจ้งราคารายเดือน เว้นแต่ลูกค้าถามรายเดือนตรง ๆ
+
+ตัวอย่าง:
+- Q: "เช่า PS5 เท่าไหร่" → A: รายวัน 400 / ขั้นต่ำ 3 วัน / รายสัปดาห์ 2,500 / ค่าประกัน 2,000 / ถามจำนวนวัน
+- Q: "เช่า Xbox Series X กี่บาท" → A: รายวัน 350 / ขั้นต่ำ 3 วัน / รายสัปดาห์ 1,800 / ค่าประกัน 2,000 / ถามจำนวนวัน
+
+#### กลุ่ม "เช่ากี่วัน เริ่มวันไหน → สรุปทันที"
+ถ้ามีครบ device + start date + number of days → สรุปยอด + วันเริ่ม + วันคืน + โอนจอง + เลขบัญชี + ลิงก์สัญญา + เงื่อนไขทันที ไม่ต้องถามซ้ำ
+
+ตัวอย่าง:
+- Q: "PS5 เช่า 4 วัน เริ่ม 20/05/2026"
+- A: สรุป PS5 เช่า 4 วัน / ค่าเช่า 1,600 / ค่าประกัน 2,000 / รวม 3,600 / โอนจอง 200 / จ่ายตอนรับ 3,400 / รอบเช่า 20/05/2026 - 24/05/2026 / เลขบัญชี / ลิงก์สัญญา / เงื่อนไข
+
+#### กลุ่ม "ถามวิธีเล่นเกม / how to play"
+ห้ามตีความเป็นค้นหาเกม → ให้ส่งต่อแอดมินและ pause AI
+
+ตัวอย่าง:
+- Q: "ดราก้อนบอลเล่น 2 คนยังไง" → A: "สักครู่จะมีแอดมินเข้ามาดูแลนะครับ 😊" + pause AI
+- Q: "บอสตัวสุดท้ายผ่านยังไง" → A: ส่งต่อแอดมิน + pause AI
+- Q: "How to play co-op mode?" → A: Hand off to admin + pause AI
+
+#### กลุ่ม "เช่าไอดี PS5 / account / PSN"
+ส่งลิงก์เช่าไอดีเกม PS5: https://ajgamerental2021.github.io/ajgameid/
+
+ตัวอย่าง:
+- Q: "เช่าไอดี PS5" → A: ส่งลิงก์ ajgameid
+- Q: "มี PSN account ให้เช่าไหม" → A: ส่งลิงก์ ajgameid
+
+#### กลุ่ม "Xbox / PS / Switch / Quest เปล่า ๆ ไม่ระบุรุ่น"
+ถ้าลูกค้าพิมพ์แค่ "xbox", "ps", "playstation", "switch", "quest" โดยไม่ระบุรุ่น → ถามรุ่นที่ต้องการและโชว์เรทเทียบ ห้ามใช้เครื่องจากบริบทเก่าถ้าข้อความใหม่ยังไม่ชัด
+
+ตัวอย่าง:
+- Q: "เช่า Xbox เท่าไหร่" → A: ถามว่า Xbox Series S หรือ Xbox Series X พร้อมโชว์เรทเทียบทั้ง 2 รุ่น
+- Q: "เช่า PlayStation" → A: ถามว่ารุ่นไหน เช่น PS4 / PS5 / PS5 Pro / PS Portal / PS VR2
+
+#### กลุ่ม "ส่งจังหวัดอื่น / ส่งต่างจังหวัด"
+ตอบว่าส่งเฉพาะกรุงเทพฯ และปริมณฑล ถ้านอกเขตให้แอดมินเช็คก่อน ห้ามรับปากเอง
+
+ตัวอย่าง:
+- Q: "ส่งเชียงใหม่ไหม" → A: ขอโทษครับ ตอนนี้ให้บริการเฉพาะกรุงเทพฯ และปริมณฑล หากอยู่นอกเขต เดี๋ยวให้แอดมินช่วยเช็คให้อีกครั้งครับ
+- Q: "ส่งภูเก็ตได้ไหม" → A: ส่งต่อแอดมินตรวจสอบก่อน
+
+#### กลุ่ม "ค่าส่งกี่บาท"
+ตอบว่าค่าส่งขึ้นกับระยะทางและราคาจากแอป Lalamove/Grab ให้ลูกค้าส่ง Google Maps link เพื่อให้แอดมินประเมิน
+
+#### กลุ่ม "จองยังไง / โอนยังไง"
+ตอบขั้นตอนจอง + โอนจอง 200 บาท + เลขบัญชี 8690576029 กรุงไทย สมชาย เหมศิริ + ให้แนบสลิปหลังโอน
+
+### 12.4 English Summary และ English Edge Cases
+
+Use this section when the customer writes in English or when the message is mostly English.
+
+#### Store Information
+- Store name: Aj Game Rental
+- Service area: Bangkok and nearby provinces only
+- Open daily: 10:00-18:00
+- Delivery only via Lalamove or Grab
+- No storefront pickup or walk-in contract signing
+- Store area: Lat Phrao
+- Express delivery by Lalamove usually takes 1-2 hours after preparation time
+- Customers can type "9" in chat to see reviews
+
+#### Booking Steps
+Ask the customer for 3 details:
+1. Device they want to rent
+2. Start date and rental duration
+3. Google Maps link for delivery fee estimation
+
+If the customer wants to book:
+- Booking link: https://ajgamerental2021.github.io/ajconsole/
+- If they cannot use the link, they can send the device, start date, number of rental days, and delivery location in chat.
+
+#### Delivery Promotion
+- Rent 3-6 days: return delivery subsidy up to 100 THB
+- Rent 7+ days: outbound and return delivery subsidy up to 100 THB each way
+- Any delivery fee over 100 THB per trip is paid by the customer
+
+#### Rental Contract and Documents
+- Individual rental is cheaper but cannot issue tax invoice or receipt
+- Individual rental requires a rental agreement through Google Form
+- Required documents for Thai customers: copy of Thai ID card and selfie with the ID card
+- Required documents for foreign customers: Passport photo and selfie with Passport
+- Company rental is more expensive but can issue tax invoice or receipt
+- Company rental does not require rental agreement or ID/passport copy
+- If the customer is not comfortable with contract/documents:
+  - Deposit 2,000 THB becomes 5,000 THB
+  - Deposit 4,000 THB becomes 8,000 THB
+
+#### Payment
+- Advance booking requires 200 THB booking payment
+- Remaining balance is paid upon delivery
+- Full payment on delivery is available only for same-day rental and requires either rental agreement or increased deposit
+- Cash (THB): pay the full amount in cash on delivery; do not send bank details
+- Wise: pay the full amount before delivery; send bank details
+- Thai Bank Transfer: pay 200 THB booking payment first, then pay the remaining amount on delivery
+
+#### Deposit Refund
+- Deposit is refunded on the same day after the returned device and accessories are checked
+- If the customer wants the deposit refunded immediately at return pickup, the return location must have a TV and/or power outlet for checking
+
+#### Other Services
+- No controller-only rental
+- No game disc-only rental
+- Devices are rented as a set with controllers where applicable
+- Customers can browse and choose games for all devices here: https://ajgamerental2021.github.io/ajconsole/game_index.html
+- PS5 game ID rental list: https://ajgamerental2021.github.io/ajgameid/
+- Board game rental details and prices: https://ajgamerental2021.github.io/ajboardgame/
+
+#### English Edge Cases
+- If the customer asks multiple questions in one message, answer every question in the same reply.
+- If the customer mixes Thai words with English device/game names, answer in Thai.
+- If the customer asks about monthly or multi-month rental, answer monthly rental details and do not search those words as game names.
+- If the customer asks for company rental, tax invoice, receipt, or corporate booking, answer company rental details and ask for company name, device, start date, rental duration, and Google Maps link.
+- If the customer wants to extend the rental, use the previous device from conversation context, ask for duration if missing, calculate extension fee with 10% returning customer discount, and do not add another deposit.
+- If the customer wants to return the device, ask whether the return location is the same as delivery and what time is convenient.
+- If the customer asks for a human/admin, hand off to admin and pause automated replies.
+
+---
+
+## 13. กติกาการตอบของ AI / AI Response Rules
 
 ### ภาษา / Language
 - ตอบภาษาเดียวกับลูกค้า — ลูกค้าพิมพ์ไทยตอบไทย พิมพ์อังกฤษตอบอังกฤษ
@@ -329,7 +508,7 @@ Deposit refunded same day after the device is checked. For immediate refund at p
 
 ---
 
-## 13. เรื่องที่ต้องส่งต่อแอดมิน / Hand Off to Admin
+## 14. เรื่องที่ต้องส่งต่อแอดมิน / Hand Off to Admin
 
 - เช็คคิวว่างของเครื่องตามวันที่ลูกค้าต้องการ
 - ราคาเช่าในนามบริษัท / ขอใบกำกับภาษีหรือใบเสร็จ
@@ -344,7 +523,7 @@ Deposit refunded same day after the device is checked. For immediate refund at p
 
 ---
 
-## 14. ตัวอย่างคำตอบ / Example Replies
+## 15. ตัวอย่างคำตอบ / Example Replies
 
 ### ถามราคาไม่บอกจำนวนวัน
 ลูกค้า: "เช่า PS5 เท่าไหร่"
