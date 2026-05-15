@@ -233,6 +233,10 @@ function getMemory(sessionKey) {
       lastStartDate: "",
       lastRentalDays: null,
       lastMessages: [],
+      noContractPending: false,
+      pendingNextDate: "",
+      pendingDevice: "",
+      summarySent: false,
     });
   }
 
@@ -256,6 +260,7 @@ async function hydrateMemoryFromRedis(sessionKey) {
         noContractPending: Boolean(data.noContractPending),
         pendingNextDate: data.pendingNextDate || "",
         pendingDevice: data.pendingDevice || "",
+        summarySent: Boolean(data.summarySent),
       });
     }
   } catch (error) {
@@ -886,9 +891,87 @@ function includesTermsQuestion(text) {
   );
 }
 
+function includesDepositRefundQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /ค่าประกัน[ก-๙ ]{0,6}(คืน|ได้คืน|คืนเมื่อไหร่|คืนตอนไหน|คืนยังไง)|คืนค่าประกัน|ได้ค่าประกันคืน|ประกันคืนเมื่อไหร่|ประกันได้คืน|deposit[ a-z]{0,10}(refund|back|return)|when.{0,12}deposit/.test(
+    value,
+  );
+}
+
+function buildDepositRefundAnswer(customerText, shouldGreetToday) {
+  if (!includesDepositRefundQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  if (english) {
+    return [
+      shouldGreetToday ? "Hello 🎮✨" : "",
+      "🔒 Deposit refund",
+      "✅ The deposit is refunded on the return day",
+      "✅ Once we receive the device and finish checking it, we transfer the deposit back",
+      "✅ Refunded to the bank account on the rental agreement (or the one you provide)",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [
+    shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+    "🔒 การคืนค่าประกัน",
+    "✅ ค่าประกันได้คืนในวันที่คืนเครื่อง",
+    "✅ เมื่อทางร้านได้รับเครื่องและเช็คเครื่องเรียบร้อย จะโอนคืนค่าประกันให้",
+    "✅ โอนคืนเข้าบัญชีที่ทำสัญญาการเช่าไว้ หรือบัญชีที่ลูกค้าแจ้งมา",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function includesGameSelectionMessage(text) {
+  const value = normalizeSearchText(text);
+  return /รายการเกมที่ต้องการ|เกมที่ต้องการ|เกมที่อยากได้|อยากได้เกม|เอาเกมพวกนี้|เลือกเกมพวกนี้|เกมที่เลือก|games i want|i want these games|these are the games/.test(
+    value,
+  );
+}
+
+function buildGameSelectionAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesGameSelectionMessage(customerText)) return "";
+  const english = isEnglishText(customerText);
+  if (memory.summarySent) {
+    return english
+      ? [shouldGreetToday ? "Hello 🎮✨" : "", "✅ Noted! We'll prepare the games you selected before delivery 🎮"]
+          .filter(Boolean)
+          .join("\n")
+      : [shouldGreetToday ? "สวัสดีครับ 🎮✨" : "", "✅ รับทราบครับ ทางร้านจะเตรียมเกมที่เลือกไว้ให้ก่อนจัดส่งเครื่องครับผม 🎮"]
+          .filter(Boolean)
+          .join("\n");
+  }
+  const missing = [];
+  if (!memory.lastDevice) missing.push(english ? "device" : "เครื่อง");
+  if (!memory.lastStartDate) missing.push(english ? "start date" : "วันเริ่ม");
+  if (!memory.lastRentalDays) missing.push(english ? "days" : "จำนวนวัน");
+  missing.push(english ? "delivery location" : "สถานที่จัดส่ง");
+  if (english) {
+    return [
+      shouldGreetToday ? "Hello 🎮✨" : "",
+      "✅ Noted on the games you want!",
+      "",
+      "🙏 To prepare your rental, could you tell me:",
+      ["📋 Which device", "📅 Start date", "🗓️ Number of days", "📍 Delivery location (Google Maps link)"].join("\n"),
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [
+    shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+    "✅ รับทราบเกมที่ต้องการแล้วครับ!",
+    "",
+    "🙏 ขอทราบรายละเอียดการเช่าเพิ่มครับ:",
+    ["📋 เครื่องที่ต้องการเช่า", "📅 วันที่เริ่มเช่า", "🗓️ จำนวนวัน", "📍 สถานที่จัดส่ง (ลิ้งค์ Google Maps)"].join("\n"),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function includesGeneralRentalQuestion(text) {
   const value = normalizeSearchText(text);
-  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธีเช่า|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า/.test(
+  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธี[ก-๙ ]{0,6}(เช่า|จอง)|ขั้นตอน[ก-๙ ]{0,6}(เช่า|จอง)|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า/.test(
     value,
   );
 }
@@ -1305,6 +1388,9 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   }
   if (startDate) {
     memory.lastStartDate = startDate.toISOString();
+  }
+  if (includePayment) {
+    memory.summarySent = true;
   }
 
   const keep = (arr) => arr.filter((x) => x !== undefined && x !== null && x !== false).join("\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -1778,7 +1864,9 @@ function includesGameQuestion(text) {
     includesIncludedGamesQuestion(text) ||
     includesAvailabilityQuestion(text) ||
     includesContractDocQuestion(text) ||
-    includesGeneralRentalQuestion(text)
+    includesGeneralRentalQuestion(text) ||
+    includesDepositRefundQuestion(text) ||
+    includesGameSelectionMessage(text)
   ) {
     return false;
   }
@@ -3249,6 +3337,24 @@ app.post("/dialogflow-webhook", async (req, res) => {
     const businessAnswer = buildBusinessRentalAnswer(customerText, memory, shouldGreetForNextBlock());
     if (businessAnswer) {
       answerBlocks.push(businessAnswer);
+    }
+
+    const depositRefundAnswer = buildDepositRefundAnswer(customerText, shouldGreetForNextBlock());
+    if (depositRefundAnswer) {
+      answerBlocks.push(depositRefundAnswer);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer, sessionKey);
+      return res.json(dialogflowText(answer));
+    }
+
+    const gameSelectionAnswer = buildGameSelectionAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (gameSelectionAnswer) {
+      answerBlocks.push(gameSelectionAnswer);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer, sessionKey);
+      return res.json(dialogflowText(answer));
     }
 
     const contractDocAnswer = buildContractDocAnswer(customerText, memory, shouldGreetForNextBlock());
