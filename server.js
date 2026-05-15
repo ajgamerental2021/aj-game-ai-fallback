@@ -481,6 +481,8 @@ function includesPriceQuestion(text, memory = {}) {
   if (includesAccountRentalQuestion(text)) return false;
   if (includesIncludedGamesQuestion(text)) return false;
   if (includesAvailabilityQuestion(text)) return false;
+  // General rental questions without a specific device must not reuse remembered device.
+  if (includesGeneralRentalQuestion(text) && !extractDeviceName(text)) return false;
   const value = normalizeSearchText(text);
   const hasDevice = Boolean(extractDeviceName(text) || memory.lastDevice);
   const monthly = /เดือน|รายเดือน|month|monthly/.test(value);
@@ -703,7 +705,8 @@ async function buildNoContractReissueAnswer(customerText, memory, shouldGreetTod
 
 function includesAvailabilityQuestion(text) {
   const value = normalizeSearchText(text);
-  if (/เครื่องว่าง|มีเครื่อง|เครื่องพร้อม|ของว่าง|เครื่องเหลือ|in stock|available now|free now|do you have (a |the )?(ps|xbox|switch|quest|console|rog|legion|steam|meta|portal)/.test(value)) {
+  if (includesGeneralRentalQuestion(text)) return false;
+  if (/เครื่องว่าง|มีเครื่องว่าง|เครื่องพร้อม|ของว่าง|เครื่องเหลือ|in stock|available now|free now|do you have (a |the )?(ps|xbox|switch|quest|console|rog|legion|steam|meta|portal)/.test(value)) {
     return true;
   }
   if (/ว่าง(ไหม|มั้ย|มัย|มะ)\b/.test(value)) return true;
@@ -984,7 +987,7 @@ function buildGameSelectionAnswer(customerText, memory, shouldGreetToday) {
 
 function includesGeneralRentalQuestion(text) {
   const value = normalizeSearchText(text);
-  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธี[ก-๙ ]{0,6}(เช่า|จอง)|ขั้นตอน[ก-๙ ]{0,6}(เช่า|จอง)|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า/.test(
+  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธี[ก-๙ ]{0,6}(เช่า|จอง)|ขั้นตอน[ก-๙ ]{0,6}(เช่า|จอง)|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|มีเครื่องอะไรให้เช่า|เครื่องอะไรให้เช่า|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า|อยากเช่าเครื่องเกม|อยากเช่าเครื่อง|สนใจเช่าเครื่อง|อยากได้เครื่องเกม|เช่าเครื่องเกม|want to rent (a |an )?(game|console)|looking to rent/.test(
     value,
   );
 }
