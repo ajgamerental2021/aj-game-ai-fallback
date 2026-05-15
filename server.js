@@ -44,12 +44,50 @@ const eventWebhookUrl = process.env.EVENT_WEBHOOK_URL || "";
 
 // Fire-and-forget event to n8n (or any webhook). Powers alerts, reports, handoff notifications.
 function notifyEvent(type, payload = {}) {
+  if (type === "pause") bumpStat("handoffs");
+  else if (type === "booking_summary") bumpStat("bookings");
+  else if (type === "intent_miss") bumpStat("intent_miss");
+
   if (!eventWebhookUrl) return;
   fetch(eventWebhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type, ...payload, at: new Date().toISOString() }),
   }).catch((error) => console.error("notifyEvent failed:", error));
+}
+
+const statsTtlSeconds = 35 * 24 * 60 * 60;
+
+// Increment a daily stat counter in Redis (key: stats:YYYY-MM-DD:<field>).
+function bumpStat(field, amount = 1) {
+  if (!redis) return;
+  const dateKey = getBangkokDateParts().dateKey;
+  const key = `stats:${dateKey}:${field}`;
+  redis
+    .incrby(key, amount)
+    .then(() => redis.expire(key, statsTtlSeconds))
+    .catch((error) => console.error("bumpStat failed:", error));
+}
+
+async function readStats(dateKey) {
+  if (!redis) return null;
+  try {
+    let cursor = "0";
+    const fields = {};
+    do {
+      const [next, keys] = await redis.scan(cursor, { match: `stats:${dateKey}:*`, count: 100 });
+      cursor = next;
+      for (const k of keys || []) {
+        const field = k.replace(`stats:${dateKey}:`, "");
+        const val = await redis.get(k);
+        fields[field] = Number(val) || 0;
+      }
+    } while (cursor !== "0");
+    return fields;
+  } catch (error) {
+    console.error("readStats failed:", error);
+    return null;
+  }
 }
 
 let knowledgeBase = "";
@@ -2950,6 +2988,39 @@ app.get("/admin/pauses", (req, res) => {
   res.json({ ok: true, pauses });
 });
 
+// Daily stats for the Daily Report workflow. ?date=YYYY-MM-DD (default = today, Bangkok).
+app.get("/admin/stats", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const dateKey = String(req.query.date || "").trim() || getBangkokDateParts().dateKey;
+  const fields = await readStats(dateKey);
+  if (!fields) {
+    return res.status(503).json({ ok: false, error: "Stats unavailable (Redis not configured)" });
+  }
+
+  const devices = Object.entries(fields)
+    .filter(([k]) => k.startsWith("device:"))
+    .map(([k, v]) => ({ device: k.replace("device:", ""), count: v }))
+    .sort((a, b) => b.count - a.count);
+
+  const chats = fields.chats || 0;
+  const bookings = fields.bookings || 0;
+  const handoffs = fields.handoffs || 0;
+  const intentMiss = fields["intent_miss"] || 0;
+  const conversionRate = chats > 0 ? Math.round((bookings / chats) * 1000) / 10 : 0;
+
+  res.json({
+    ok: true,
+    date: dateKey,
+    chats,
+    bookings,
+    handoffs,
+    intentMiss,
+    conversionRate,
+    topDevices: devices.slice(0, 5),
+  });
+});
+
 app.get("/admin/pause-sheet", async (req, res) => {
   if (!requireAdmin(req, res)) return;
 
@@ -3352,8 +3423,10 @@ app.post("/dialogflow-webhook", async (req, res) => {
   const today = getBangkokDateParts();
   const detectedDevice = extractDeviceName(customerText);
 
+  if (customerText.trim()) bumpStat("chats");
   if (detectedDevice) {
     memory.lastDevice = detectedDevice;
+    bumpStat(`device:${detectedDevice}`);
   }
 
   const shouldGreetToday = memory.greetedDate !== today.dateKey;
