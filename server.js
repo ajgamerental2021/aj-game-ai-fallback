@@ -893,45 +893,49 @@ function includesGeneralRentalQuestion(text) {
   );
 }
 
+const deviceCategories = [
+  { th: "🎮 Console", en: "🎮 Console", devices: ["PS4", "PS5", "PS5 Pro", "PS Portal", "Xbox Series S", "Xbox Series X", "Nintendo Switch 1", "Nintendo Switch 2"] },
+  { th: "🥽 VR & AR", en: "🥽 VR & AR", devices: ["PS VR2", "Meta Quest 3", "Meta Quest 3s", "Viture Beast"] },
+  { th: "💻 PC Handheld", en: "💻 PC Handheld", devices: ["ROG XBOX Ally X", "Steam Deck OLED", "Lenovo Legion GO2"] },
+  { th: "🕹️ อื่นๆ", en: "🕹️ Others", devices: ["Logitech G29"] },
+];
+
+function buildDeviceCategoryList(english = false) {
+  return deviceCategories
+    .map((cat) => {
+      const available = cat.devices.filter((d) => deviceRates.has(d));
+      if (!available.length) return "";
+      const header = english ? cat.en : cat.th;
+      return [header, ...available.map((d) => `🔹 ${d}`)].join("\n");
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function buildGeneralRentalInfoAnswer(customerText, memory, shouldGreetToday) {
   if (!includesGeneralRentalQuestion(customerText)) return "";
   if (extractDeviceName(customerText)) return "";
   const english = isEnglishText(customerText);
-  const deviceList = [...deviceRates.keys()];
   if (english) {
     return [
-      shouldGreetToday ? "Hello 🎮✨" : "",
-      "🎮 We have these consoles available for rent:",
-      deviceList.map((d) => `🔹 ${d}`).join("\n"),
-      "",
-      "📋 To quote your rental, please tell me:",
-      "1️⃣ Which device you want",
-      "2️⃣ Start date",
-      "3️⃣ Number of days",
-      "4️⃣ Delivery location (Google Maps link)",
-      "",
-      "📝 A rental agreement is required (or extra deposit if you skip it).",
-      "🙏 Send the details and I'll calculate the total right away!",
+      shouldGreetToday ? "Hello 🎮✨" : false,
+      "🎮 We have these devices available for rent:",
+      buildDeviceCategoryList(true),
+      ["📋 To quote your rental, please tell me:", "1️⃣ Which device you want", "2️⃣ Start date", "3️⃣ Number of days", "4️⃣ Delivery location (Google Maps link)"].join("\n"),
+      ["📝 A rental agreement is required (or extra deposit if skipped).", "🙏 Send the details and I'll calculate the total right away!"].join("\n"),
     ]
       .filter(Boolean)
-      .join("\n");
+      .join("\n\n");
   }
   return [
-    shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+    shouldGreetToday ? "สวัสดีครับ 🎮✨" : false,
     "🎮 ทางร้านมีเครื่องให้เช่าตามนี้ครับ:",
-    deviceList.map((d) => `🔹 ${d}`).join("\n"),
-    "",
-    "📋 ขอข้อมูลเพื่อคำนวณค่าเช่าครับ:",
-    "1️⃣ เครื่องที่ต้องการเช่า",
-    "2️⃣ วันที่เริ่มเช่า",
-    "3️⃣ จำนวนวัน",
-    "4️⃣ สถานที่จัดส่ง (ลิ้งค์ Google Maps)",
-    "",
-    "📝 การเช่ามีทำสัญญาการเช่าด้วยครับ (หรือเพิ่มค่าประกันถ้าไม่ทำสัญญา)",
-    "🙏 แจ้งรายละเอียดมาได้เลย เดี๋ยวคำนวณยอดให้ทันทีครับ",
+    buildDeviceCategoryList(false),
+    ["📋 ขอข้อมูลเพื่อคำนวณค่าเช่าครับ:", "1️⃣ เครื่องที่ต้องการเช่า", "2️⃣ วันที่เริ่มเช่า", "3️⃣ จำนวนวัน", "4️⃣ สถานที่จัดส่ง (ลิ้งค์ Google Maps)"].join("\n"),
+    ["📝 การเช่ามีทำสัญญาการเช่าด้วยครับ (หรือเพิ่มค่าประกันถ้าไม่ทำสัญญา)", "🙏 แจ้งรายละเอียดมาได้เลย เดี๋ยวคำนวณยอดให้ทันทีครับ"].join("\n"),
   ]
     .filter(Boolean)
-    .join("\n");
+    .join("\n\n");
 }
 
 function includesContractDocQuestion(text) {
@@ -1200,28 +1204,23 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   const deviceName = extractDeviceName(customerText) || memory.lastDevice;
 
   if (!deviceName || !deviceRates.has(deviceName)) {
-    const deviceList = [...deviceRates.keys()];
     return english
       ? [
-          shouldGreetToday ? "Hello 🎮✨" : "",
-          "🎮 We have these consoles available for rent:",
-          deviceList.map((d) => `🔹 ${d}`).join("\n"),
-          "",
-          "📋 Please tell me: device, start date, number of days, delivery location.",
-          "📝 A rental agreement is required (or extra deposit if skipped).",
+          shouldGreetToday ? "Hello 🎮✨" : false,
+          "🎮 We have these devices available for rent:",
+          buildDeviceCategoryList(true),
+          ["📋 Please tell me: device, start date, number of days, delivery location.", "📝 A rental agreement is required (or extra deposit if skipped)."].join("\n"),
         ]
           .filter(Boolean)
-          .join("\n")
+          .join("\n\n")
       : [
-          shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+          shouldGreetToday ? "สวัสดีครับ 🎮✨" : false,
           "🎮 ทางร้านมีเครื่องให้เช่าตามนี้ครับ:",
-          deviceList.map((d) => `🔹 ${d}`).join("\n"),
-          "",
-          "📋 รบกวนแจ้ง: เครื่องที่ต้องการ, วันที่เริ่มเช่า, จำนวนวัน, สถานที่จัดส่งครับ",
-          "📝 การเช่ามีทำสัญญาการเช่าด้วย (หรือเพิ่มค่าประกันถ้าไม่ทำสัญญา)",
+          buildDeviceCategoryList(false),
+          ["📋 รบกวนแจ้ง: เครื่องที่ต้องการ, วันที่เริ่มเช่า, จำนวนวัน, สถานที่จัดส่งครับ", "📝 การเช่ามีทำสัญญาการเช่าด้วย (หรือเพิ่มค่าประกันถ้าไม่ทำสัญญา)"].join("\n"),
         ]
           .filter(Boolean)
-          .join("\n");
+          .join("\n\n");
   }
 
   memory.lastDevice = deviceName;
