@@ -1733,9 +1733,19 @@ function compactSearchText(text) {
 
 function includesGameplayHowToQuestion(text) {
   const value = normalizeSearchText(text);
-  return /ยังไง|อย่างไร|วิธีเล่น|เล่นยังไง|เล่น 2 คน|เล่น2คน|เล่นสองคน|โหมด|coop|co op|multiplayer|how to play|how do (you|i) play|gameplay|walkthrough|guide|ผ่านด่าน|บอส|cheat|โกง/.test(
-    value,
-  );
+  if (/เช่า|rent|ราคา|กี่บาท|เท่าไหร่/.test(value)) return false;
+  const patterns = [
+    /เล่น[ก-๙ 0-9]{0,12}(ยังไง|อย่างไร|ไง)/,
+    /วิธีเล่น/,
+    /เล่น\s*\d+\s*คน/,
+    /เล่น(สอง|สาม|สี่|หลาย)คน/,
+    /โหมด(เล่น|มัลติ|co)/,
+    /\b(coop|co-op|multiplayer|gameplay|walkthrough)\b/,
+    /how to play|how do (you|i) play/,
+    /ผ่านด่าน|สู้บอส|ตีบอส|ล้มบอส/,
+    /สูตรโกง|cheat code/,
+  ];
+  return patterns.some((re) => re.test(value));
 }
 
 function buildGameplayHowToAnswer(customerText, shouldGreetToday) {
