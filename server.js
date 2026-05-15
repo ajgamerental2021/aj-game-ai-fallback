@@ -886,6 +886,77 @@ function includesTermsQuestion(text) {
   );
 }
 
+function includesContractDocQuestion(text) {
+  const value = normalizeSearchText(text);
+  if (/ไม่[ก-๙ ]{0,14}สัญญา/.test(value)) return false;
+  const patterns = [
+    /ทำสัญญา[ก-๙ ]{0,12}(ยังไง|อย่างไร|ไง|ขั้นตอน)/,
+    /สัญญา[ก-๙ ]{0,12}(ทำยังไง|ทำอย่างไร|ยังไง)/,
+    /เซ็นสัญญา[ก-๙ ]{0,12}(ยังไง|อย่างไร)/,
+    /(ใช้|ต้องใช้|แนบ)[ก-๙ ]{0,8}เอกสาร/,
+    /เอกสาร[ก-๙ ]{0,8}(อะไร|ที่ใช้|ที่ต้อง)/,
+    /ใช้อะไรบ้าง/,
+    /ต้องเตรียมอะไร/,
+    /how.{0,20}(do i|to).{0,12}contract/,
+    /what.{0,12}document/,
+    /documents?.{0,12}(need|require)/,
+    /what.{0,12}(do i need|to prepare)/,
+    /rental agreement.{0,12}(how|process|step)/,
+  ];
+  return patterns.some((re) => re.test(value));
+}
+
+function buildContractDocAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesContractDocQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  const deviceName = extractDeviceName(customerText) || memory.lastDevice;
+  const rate = deviceName ? deviceRates.get(deviceName) : null;
+  const noContractDeposit = rate ? (rate.deposit === 4000 ? 8000 : 5000) : null;
+  const depositLineTh = rate
+    ? `🔒 ${deviceName} ไม่ทำสัญญา ค่าประกันปรับเป็น ${formatMoney(noContractDeposit)} (จากเดิม ${formatMoney(rate.deposit)})`
+    : "🔒 ถ้าไม่ทำสัญญา ค่าประกันปรับเป็น 5,000 / 8,000 บาท แล้วแต่รุ่นเครื่อง";
+  const depositLineEn = rate
+    ? `🔒 Without agreement, ${deviceName} deposit becomes ${formatMoney(noContractDeposit, true)} (from ${formatMoney(rate.deposit, true)})`
+    : "🔒 Without agreement, deposit becomes 5,000 / 8,000 THB depending on device";
+
+  if (english) {
+    return [
+      shouldGreetToday ? "Hello 🎮✨" : "",
+      "📝 Rental agreement process",
+      "1️⃣ Fill in the Google Form",
+      "2️⃣ Upload a photo of your Passport",
+      "3️⃣ Upload a selfie holding your Passport",
+      "",
+      "🔗 Rental agreement form:",
+      "https://forms.gle/92PBGXEHMQhtPov48",
+      "",
+      "📌 Prefer not to do the agreement?",
+      depositLineEn,
+      "",
+      "🙏 Any questions, just let me know.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [
+    shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+    "📝 ขั้นตอนทำสัญญาการเช่า",
+    "1️⃣ กรอกข้อมูลในลิ้งค์ Google Form",
+    "2️⃣ อัพโหลดรูปสำเนาบัตรประชาชน",
+    "3️⃣ อัพโหลดรูปเซลฟี่คู่กับบัตรประชาชน",
+    "",
+    "🔗 ลิ้งค์ทำสัญญาการเช่า:",
+    "https://forms.gle/Y6xfFaMyuJ9REhtz9",
+    "",
+    "📌 ถ้าไม่สะดวกหรือไม่ต้องการทำสัญญา",
+    depositLineTh,
+    "",
+    "🙏 มีข้อสงสัยเพิ่มเติม แจ้งได้เลยครับ",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildTermsAnswer(customerText, shouldGreetToday) {
   if (!includesTermsQuestion(customerText)) return "";
   const english = isEnglishText(customerText);
@@ -1643,7 +1714,8 @@ function includesGameQuestion(text) {
     includesAccountRentalQuestion(text) ||
     includesGameplayHowToQuestion(text) ||
     includesIncludedGamesQuestion(text) ||
-    includesAvailabilityQuestion(text)
+    includesAvailabilityQuestion(text) ||
+    includesContractDocQuestion(text)
   ) {
     return false;
   }
@@ -3114,6 +3186,15 @@ app.post("/dialogflow-webhook", async (req, res) => {
     const businessAnswer = buildBusinessRentalAnswer(customerText, memory, shouldGreetForNextBlock());
     if (businessAnswer) {
       answerBlocks.push(businessAnswer);
+    }
+
+    const contractDocAnswer = buildContractDocAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (contractDocAnswer) {
+      answerBlocks.push(contractDocAnswer);
+      const answer = answerBlocks.join("\n\n");
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, answer, sessionKey);
+      return res.json(dialogflowText(answer));
     }
 
     const termsAnswer = buildTermsAnswer(customerText, shouldGreetForNextBlock());
