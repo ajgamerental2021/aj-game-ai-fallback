@@ -40,6 +40,17 @@ const pauseSheetCacheMs = Number(process.env.PAUSE_SHEET_CACHE_MS || 30000);
 const pauseSheetFetchTimeoutMs = Number(process.env.PAUSE_SHEET_FETCH_TIMEOUT_MS || 3000);
 const pauseWebhookUrl = process.env.PAUSE_WEBHOOK_URL || "";
 const defaultPauseMinutes = Number(process.env.DEFAULT_PAUSE_MINUTES || 720);
+const eventWebhookUrl = process.env.EVENT_WEBHOOK_URL || "";
+
+// Fire-and-forget event to n8n (or any webhook). Powers alerts, reports, handoff notifications.
+function notifyEvent(type, payload = {}) {
+  if (!eventWebhookUrl) return;
+  fetch(eventWebhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, ...payload, at: new Date().toISOString() }),
+  }).catch((error) => console.error("notifyEvent failed:", error));
+}
 
 let knowledgeBase = "";
 let inventoryCache = {
@@ -2391,6 +2402,8 @@ async function getEffectivePause(sessionKey, customerId = "") {
 }
 
 async function persistPauseToWebhook({ sessionKey, customerId, minutes, reason, status = "paused" }) {
+  notifyEvent(status === "resumed" ? "resume" : "pause", { sessionKey, customerId, minutes, reason });
+
   if (!pauseWebhookUrl) return;
 
   try {
@@ -3421,9 +3434,18 @@ app.post("/dialogflow-webhook", async (req, res) => {
       }
 
       if (!longTermAnswer && !returnAnswer && !extensionAnswer) {
+        const summaryBefore = memory.summarySent;
         const priceAnswer = await buildPriceAnswer(customerText, memory, shouldGreetForNextBlock());
         if (priceAnswer) {
           answerBlocks.push(priceAnswer);
+          if (!summaryBefore && memory.summarySent) {
+            notifyEvent("booking_summary", {
+              sessionKey,
+              device: memory.lastDevice,
+              days: memory.lastRentalDays,
+              startDate: memory.lastStartDate,
+            });
+          }
         }
       }
 
@@ -3492,6 +3514,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
       `recentMessages=${JSON.stringify(memory.lastMessages)}`,
     ].join("\n");
 
+    notifyEvent("intent_miss", { sessionKey, customerText });
     const answer = await askAI(customerText, memory, sessionContext);
     memory.greetedDate = today.dateKey;
     updateRecentMessages(memory, customerText, answer, sessionKey);
