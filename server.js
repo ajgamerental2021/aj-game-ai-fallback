@@ -249,6 +249,8 @@ function getMemory(sessionKey) {
       pendingDevice: "",
       summarySent: false,
       preferMonthly: false,
+      lastAnswerType: "",
+      awaitingRecommendation: false,
     });
   }
 
@@ -274,6 +276,8 @@ async function hydrateMemoryFromRedis(sessionKey) {
         pendingDevice: data.pendingDevice || "",
         summarySent: Boolean(data.summarySent),
         preferMonthly: Boolean(data.preferMonthly),
+        lastAnswerType: data.lastAnswerType || "",
+        awaitingRecommendation: Boolean(data.awaitingRecommendation),
       });
     }
   } catch (error) {
@@ -484,11 +488,21 @@ function includesPriceQuestion(text, memory = {}) {
   // General rental questions without a specific device must not reuse remembered device.
   if (includesGeneralRentalQuestion(text) && !extractDeviceName(text)) return false;
   const value = normalizeSearchText(text);
-  const hasDevice = Boolean(extractDeviceName(text) || memory.lastDevice);
+  const deviceInText = extractDeviceName(text);
+  const hasDevice = Boolean(deviceInText || memory.lastDevice);
   const monthly = /เดือน|รายเดือน|month|monthly/.test(value);
   const hasRentalDays = Boolean(extractRentalDays(text));
   const hasStartDate = Boolean(extractStartDate(text));
   const rentalContext = /เช่า|rent|rental|วัน|พรุ่งนี้|วันนี้|tomorrow|today|เริ่ม|start/.test(value);
+
+  // Follow-up: customer names a device right after a price answer ("PS4 ล่ะ", "แล้ว Switch")
+  // or the message is basically just the device name.
+  if (deviceInText) {
+    const compact = compactSearchText(text);
+    const deviceCompact = compactSearchText(deviceInText);
+    const isShortDeviceMsg = compact.length <= deviceCompact.length + 8;
+    if (isShortDeviceMsg || memory.lastAnswerType === "price") return true;
+  }
 
   return (
     /ราคา|กี่บาท|เท่าไหร่|ค่าเช่า|เรท|สรุป|ยอด|รวม|price|how much|rate|cost|rental fee|summary|total/.test(value) ||
@@ -985,6 +999,107 @@ function buildGameSelectionAnswer(customerText, memory, shouldGreetToday) {
     .join("\n");
 }
 
+function includesRecommendationQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /แนะนำ[ก-๙ ]{0,8}(เครื่อง|รุ่น)|เครื่องไหนดี|รุ่นไหนดี|เครื่องอะไรดี|ควรเช่าอะไร|ควรเช่าเครื่องไหน|เช่าอะไรดี|อยากเช่าแนะนำ|recommend|which (one|device|console).{0,12}(should|good|recommend)|what should i rent/.test(
+    value,
+  );
+}
+
+function buildRecommendationAnswer(customerText, memory, shouldGreetToday) {
+  if (!includesRecommendationQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  memory.awaitingRecommendation = true;
+  if (english) {
+    return [
+      shouldGreetToday ? "Hello 🎮✨" : "",
+      "🙏 Happy to help you choose! How do you plan to play?",
+      "",
+      "1️⃣ 2-player games / football → console games",
+      "2️⃣ Family or friends, 2-4 players together",
+      "3️⃣ VR headset experience",
+      "",
+      "😊 Just tell me which style suits you.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [
+    shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
+    "🙏 ยินดีช่วยเลือกครับ! อยากเล่นประมาณไหนครับ?",
+    "",
+    "1️⃣ เล่น 2 คน / เกมฟุตบอล",
+    "2️⃣ เล่นกับลูก เพื่อน ครอบครัว ประมาณ 2-4 คน",
+    "3️⃣ สนใจแว่น VR",
+    "",
+    "😊 แจ้งแนวที่ชอบมาได้เลยครับ",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildRecommendationReply(customerText, memory, shouldGreetToday) {
+  if (!memory.awaitingRecommendation) return "";
+  const value = normalizeSearchText(customerText);
+  const english = isEnglishText(customerText);
+
+  const isTwoPlayer = /2 ?คน|สองคน|ฟุตบอล|บอล|fifa|pes|efootball|football|2 ?player|two player|1\b/.test(value);
+  const isFamily = /ครอบครัว|ลูก|เพื่อน|หลายคน|3 ?คน|4 ?คน|สามคน|สี่คน|family|friends|2 4|2-4|3-4|2\b/.test(value);
+  const isVR = /vr|วีอาร์|แว่น|quest|3\b/.test(value);
+
+  if (!isTwoPlayer && !isFamily && !isVR) return "";
+  memory.awaitingRecommendation = false;
+
+  if (isVR) {
+    return english
+      ? [
+          "🥽 For VR I recommend Meta Quest 3 or Meta Quest 3s",
+          "✅ Both are standalone — no need to connect to any other device",
+          "🎮 Games are ready to play inside the headset",
+          "",
+          "🙏 Want the rental rate? Just tell me which model and how many days.",
+        ].join("\n")
+      : [
+          "🥽 ถ้าเล่น VR แนะนำ Meta Quest 3 หรือ Meta Quest 3s ครับ",
+          "✅ ทั้ง 2 รุ่นเล่นได้ด้วยตัวเอง ไม่ต้องต่อกับเครื่องไหน",
+          "🎮 มีเกมพร้อมเล่นในแว่นเลยครับ 😊",
+          "",
+          "🙏 อยากดูราคาเช่า แจ้งรุ่นและจำนวนวันได้เลยครับ",
+        ].join("\n");
+  }
+  if (isFamily) {
+    return english
+      ? [
+          "🎮 For family/friends (2-4 players) I recommend Nintendo Switch 1 or Switch 2",
+          "👪 Great for playing together",
+          "🕹️ For 4 players you'll need extra controllers (+70 THB/day per extra controller)",
+          "",
+          "🙏 Want the rate? Tell me the model and how many days.",
+        ].join("\n")
+      : [
+          "🎮 เล่นกับครอบครัว/เพื่อน 2-4 คน แนะนำ Nintendo Switch 1 หรือ Switch 2 ครับ",
+          "👪 เล่นด้วยกันสนุกครับ",
+          "🕹️ ถ้าเล่น 4 คน ต้องเช่าจอยเพิ่ม มีค่าบริการเพิ่ม วันละ 70 บาท ต่อจอย",
+          "",
+          "🙏 อยากดูราคาเช่า แจ้งรุ่นและจำนวนวันได้เลยครับ",
+        ].join("\n");
+  }
+  // two-player / football
+  return english
+    ? [
+        "🎮 For 2-player games and football I recommend PS5, Xbox Series S or Series X",
+        "⚡️ Great performance, games included",
+        "",
+        "🙏 Want the rate? Tell me the model and how many days.",
+      ].join("\n")
+    : [
+        "🎮 เล่น 2 คนและเกมฟุตบอล แนะนำ PS5, Xbox Series S หรือ Series X ครับ",
+        "⚡️ สเปกแรง รวมเกมให้ด้วย",
+        "",
+        "🙏 อยากดูราคาเช่า แจ้งรุ่นและจำนวนวันได้เลยครับ",
+      ].join("\n");
+}
+
 function includesGeneralRentalQuestion(text) {
   const value = normalizeSearchText(text);
   return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธี[ก-๙ ]{0,6}(เช่า|จอง)|ขั้นตอน[ก-๙ ]{0,6}(เช่า|จอง)|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|มีเครื่องอะไรให้เช่า|เครื่องอะไรให้เช่า|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า|อยากเช่าเครื่องเกม|อยากเช่าเครื่อง|สนใจเช่าเครื่อง|อยากได้เครื่องเกม|เช่าเครื่องเกม|want to rent (a |an )?(game|console)|looking to rent/.test(
@@ -1300,7 +1415,10 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   if (!includesPriceQuestion(customerText, memory)) return "";
 
   const english = isEnglishText(customerText);
-  const deviceName = extractDeviceName(customerText) || memory.lastDevice;
+  const deviceInText = extractDeviceName(customerText);
+  // After showing the device list, a generic price ask must not reuse a stale remembered device.
+  const ignoreStaleDevice = !deviceInText && memory.lastAnswerType === "device_list";
+  const deviceName = deviceInText || (ignoreStaleDevice ? "" : memory.lastDevice);
 
   if (!deviceName || !deviceRates.has(deviceName)) {
     return english
@@ -1889,7 +2007,8 @@ function includesGameQuestion(text) {
     includesContractDocQuestion(text) ||
     includesGeneralRentalQuestion(text) ||
     includesDepositRefundQuestion(text) ||
-    includesGameSelectionMessage(text)
+    includesGameSelectionMessage(text) ||
+    includesRecommendationQuestion(text)
   ) {
     return false;
   }
@@ -3237,6 +3356,24 @@ app.post("/dialogflow-webhook", async (req, res) => {
   try {
     const answerBlocks = [];
     const shouldGreetForNextBlock = () => shouldGreetToday && answerBlocks.length === 0;
+    const finish = (text) => {
+      memory.greetedDate = today.dateKey;
+      updateRecentMessages(memory, customerText, text, sessionKey);
+      return res.json(dialogflowText(text));
+    };
+
+    // Recommendation flow: handle the customer's answer to "how do you want to play?"
+    const recommendationReply = buildRecommendationReply(customerText, memory, shouldGreetForNextBlock());
+    if (recommendationReply) {
+      memory.lastAnswerType = "recommendation";
+      return finish(recommendationReply);
+    }
+
+    const recommendationAnswer = buildRecommendationAnswer(customerText, memory, shouldGreetForNextBlock());
+    if (recommendationAnswer) {
+      memory.lastAnswerType = "recommendation";
+      return finish(recommendationAnswer);
+    }
 
     const promotionAnswer = buildPromotionAnswer(customerText, shouldGreetForNextBlock());
     if (promotionAnswer) {
@@ -3395,10 +3532,8 @@ app.post("/dialogflow-webhook", async (req, res) => {
     const generalRentalAnswer = buildGeneralRentalInfoAnswer(customerText, memory, shouldGreetForNextBlock());
     if (generalRentalAnswer) {
       answerBlocks.push(generalRentalAnswer);
-      const answer = answerBlocks.join("\n\n");
-      memory.greetedDate = today.dateKey;
-      updateRecentMessages(memory, customerText, answer, sessionKey);
-      return res.json(dialogflowText(answer));
+      memory.lastAnswerType = "device_list";
+      return finish(answerBlocks.join("\n\n"));
     }
 
     const termsAnswer = buildTermsAnswer(customerText, shouldGreetForNextBlock());
@@ -3442,6 +3577,7 @@ app.post("/dialogflow-webhook", async (req, res) => {
         const priceAnswer = await buildPriceAnswer(customerText, memory, shouldGreetForNextBlock());
         if (priceAnswer) {
           answerBlocks.push(priceAnswer);
+          memory.lastAnswerType = "price";
           if (!summaryBefore && memory.summarySent) {
             notifyEvent("booking_summary", {
               sessionKey,
