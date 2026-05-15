@@ -253,6 +253,9 @@ async function hydrateMemoryFromRedis(sessionKey) {
         lastStartDate: data.lastStartDate || "",
         lastRentalDays: data.lastRentalDays ?? null,
         lastMessages: Array.isArray(data.lastMessages) ? data.lastMessages : [],
+        noContractPending: Boolean(data.noContractPending),
+        pendingNextDate: data.pendingNextDate || "",
+        pendingDevice: data.pendingDevice || "",
       });
     }
   } catch (error) {
@@ -588,7 +591,7 @@ async function buildPendingNextDateAnswer(customerText, memory, shouldGreetToday
 
 function includesNoContractIntent(text) {
   const value = normalizeSearchText(text);
-  return /ไม่ทำสัญญา|ไม่อยากทำสัญญา|ไม่สะดวกทำสัญญา|ไม่ต้องการสัญญา|ไม่เอาสัญญา|ไม่เซ็นสัญญา|no contract|without contract|skip contract|ไม่แนบบัตร/.test(
+  return /ไม่[ก-๙ ]{0,14}สัญญา|ไม่แนบบัตร|ไม่ส่งบัตร|no contract|without contract|skip contract|no id|without id/.test(
     value,
   );
 }
@@ -875,7 +878,7 @@ function buildAccountRentalAnswer(customerText, shouldGreetToday) {
 
 function includesTermsQuestion(text) {
   const value = normalizeSearchText(text);
-  if (/ไม่ทำสัญญา|ไม่อยากทำสัญญา|ไม่สะดวกทำสัญญา|ไม่ต้องการสัญญา|ไม่เอาสัญญา|ไม่เซ็นสัญญา|ไม่แนบบัตร|no contract|without contract|no id|without id|skip contract/.test(value)) {
+  if (/ไม่[ก-๙ ]{0,14}สัญญา|ไม่แนบบัตร|ไม่ส่งบัตร|no contract|without contract|no id|without id|skip contract/.test(value)) {
     return false;
   }
   return /ข้อกำหนด|เงื่อนไข|กติกา|รายละเอียด|ต้องใช้อะไร|ใช้เอกสาร|มัดจำ|ประกัน|สัญญา|terms|condition|requirement|deposit|agreement/.test(
@@ -1099,7 +1102,11 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
 
   memory.lastDevice = deviceName;
 
-  const days = extractRentalDays(customerText) || memory.lastRentalDays || null;
+  const explicitDays = extractRentalDays(customerText);
+  const explicitStart = extractStartDate(customerText);
+  // Only reuse remembered days when this message continues a booking (has a start date).
+  // A bare price ask ("เช่า PS5 เท่าไหร่", "รายวันเท่าไหร่") must show the rate table.
+  const days = explicitDays || (explicitStart ? memory.lastRentalDays : null) || null;
   const noContract = includesNoContractRequest(customerText);
   const returningCustomer = /ลูกค้าเก่า|เคยเช่า|returning|old customer/i.test(customerText);
   const calc = days ? calculateRental(deviceName, days, noContract, returningCustomer) : null;
