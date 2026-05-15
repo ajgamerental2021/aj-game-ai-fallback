@@ -532,6 +532,52 @@ function isWithinBusinessHours() {
   return hour >= 10 && hour < 18;
 }
 
+function includesDeliveryTimeQuestion(text) {
+  const value = normalizeSearchText(text);
+  return /ส่ง[ก-๙ ]{0,10}(ตอนไหน|เมื่อไหร่|กี่โมง|ทันไหม|วันนี้ทันไหม)|จัดส่ง[ก-๙ ]{0,10}(ตอนไหน|เมื่อไหร่|กี่โมง|ทันไหม)|เตรียมเครื่อง[ก-๙ ]{0,6}(นาน|กี่)|ใช้เวลา[ก-๙ ]{0,8}(ส่ง|เตรียม|จัดส่ง|นาน)|กี่ชั่วโมง[ก-๙ ]{0,6}(ส่ง|ถึง|จัดส่ง)|how long.{0,20}(deliver|delivery|prepare|ship)|delivery time|when.{0,12}(deliver|ship)/.test(
+    value,
+  );
+}
+
+function buildDeliveryTimeAnswer(customerText, shouldGreetToday) {
+  if (!includesDeliveryTimeQuestion(customerText)) return "";
+  const english = isEnglishText(customerText);
+  if (english) {
+    return [
+      shouldGreetToday ? "Hello 🎮✨" : false,
+      "🚚 Preparation & delivery time",
+      "",
+      "🎮 Devices that need game downloads:",
+      "⏳ Preparation about 2-3 hours",
+      "🚚 Plus delivery 1-2 hours",
+      "",
+      "💾 Devices that don't need downloads:",
+      "⚡️ Ready to ship within 30 minutes",
+      "🚚 Plus delivery 1-2 hours",
+      "",
+      "🙏 Tell me the device and I can estimate more precisely.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  return [
+    shouldGreetToday ? "สวัสดีครับ 🎮✨" : false,
+    "🚚 เวลาเตรียมเครื่องและจัดส่ง",
+    "",
+    "🎮 เครื่องที่ต้องดาวน์โหลดเกม:",
+    "⏳ ใช้เวลาเตรียมประมาณ 2-3 ชั่วโมง",
+    "🚚 บวกเวลาจัดส่งอีก 1-2 ชั่วโมง",
+    "",
+    "💾 เครื่องที่ไม่ต้องดาวน์โหลดเกม:",
+    "⚡️ จัดส่งออกจากร้านได้ภายใน 30 นาที",
+    "🚚 บวกเวลาจัดส่งอีก 1-2 ชั่วโมง",
+    "",
+    "🙏 แจ้งรุ่นเครื่องมาได้เลย เดี๋ยวประเมินเวลาให้แม่นขึ้นครับ",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function includesRentNowQuestion(text) {
   const value = normalizeSearchText(text);
   return /(เช่า.{0,4}ตอนนี้|ตอนนี้.{0,4}ว่าง|เช่าเลย|เอาตอนนี้|เอาเลย|รับเครื่องตอนนี้|รับวันนี้เลย|ส่งวันนี้เลย|rent now|right now|today now|deliver today|same day|same-day|asap)/.test(
@@ -2011,7 +2057,8 @@ function includesGameQuestion(text) {
     includesGeneralRentalQuestion(text) ||
     includesDepositRefundQuestion(text) ||
     includesGameSelectionMessage(text) ||
-    includesRecommendationQuestion(text)
+    includesRecommendationQuestion(text) ||
+    includesDeliveryTimeQuestion(text)
   ) {
     return false;
   }
@@ -3418,6 +3465,12 @@ app.post("/dialogflow-webhook", async (req, res) => {
       memory.greetedDate = today.dateKey;
       updateRecentMessages(memory, customerText, answer, sessionKey);
       return res.json(dialogflowText(answer));
+    }
+
+    const deliveryTimeAnswer = buildDeliveryTimeAnswer(customerText, shouldGreetForNextBlock());
+    if (deliveryTimeAnswer) {
+      answerBlocks.push(deliveryTimeAnswer);
+      return finish(answerBlocks.join("\n\n"));
     }
 
     const rentNowAnswer = buildRentNowAnswer(customerText, shouldGreetForNextBlock());

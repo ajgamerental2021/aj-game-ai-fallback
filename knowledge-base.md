@@ -122,6 +122,14 @@ Rent 3-6 days: return delivery subsidy up to 100 THB. Rent 7+ days: subsidy up t
 - ลูกค้าเก่าที่เคยเช่าแล้ว ลดค่าเช่า 10% ในครั้งถัดไป
 - คิดจากค่าเช่าเท่านั้น ไม่รวมค่าประกันและค่าส่ง
 
+### เวลาเตรียมเครื่องและจัดส่ง / Preparation & Delivery Time
+- เครื่องที่ต้องดาวน์โหลดเกม: เตรียมประมาณ 2-3 ชั่วโมง + จัดส่งอีก 1-2 ชั่วโมง
+- เครื่องที่ไม่ต้องดาวน์โหลดเกม: จัดส่งออกจากร้านได้ภายใน 30 นาที + จัดส่งอีก 1-2 ชั่วโมง
+- เวลาจัดส่งผ่าน Lalamove/Grab ปกติ 1-2 ชั่วโมง ขึ้นกับระยะทาง
+
+Devices needing game downloads: ~2-3 hours preparation + 1-2 hours delivery.
+Devices without downloads: ready to ship within 30 minutes + 1-2 hours delivery.
+
 ---
 
 ## 7. การจองและชำระเงิน / Booking & Payment
