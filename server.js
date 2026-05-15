@@ -237,6 +237,7 @@ function getMemory(sessionKey) {
       pendingNextDate: "",
       pendingDevice: "",
       summarySent: false,
+      preferMonthly: false,
     });
   }
 
@@ -261,6 +262,7 @@ async function hydrateMemoryFromRedis(sessionKey) {
         pendingNextDate: data.pendingNextDate || "",
         pendingDevice: data.pendingDevice || "",
         summarySent: Boolean(data.summarySent),
+        preferMonthly: Boolean(data.preferMonthly),
       });
     }
   } catch (error) {
@@ -1488,9 +1490,10 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   return groups.filter(Boolean).join("\n\n");
 }
 
-function buildLongTermRentalAnswer(customerText, memory, shouldGreetToday) {
-  if (!includesLongTermRentalQuestion(customerText)) return "";
+function buildLongTermRentalAnswer(customerText, memory, shouldGreetToday, force = false) {
+  if (!force && !includesLongTermRentalQuestion(customerText)) return "";
 
+  memory.preferMonthly = true;
   const english = isEnglishText(customerText);
   const deviceName = extractDeviceName(customerText) || memory.lastDevice;
   const months = extractRentalMonths(customerText);
@@ -1526,37 +1529,43 @@ function buildLongTermRentalAnswer(customerText, memory, shouldGreetToday) {
   const total = rentalFee + rate.deposit;
   const monthLabel = months || 1;
 
-  return english
-    ? [
-        shouldGreetToday ? "Hello 🎮✨" : "",
-        `${deviceName} monthly rental is available 😊🎮`,
-        "",
-        `📆 Monthly rental: ${formatMoney(rate.monthly, true)} / month`,
-        months ? `🗓️ Duration: ${months} months` : "",
-        months ? `💰 Rental fee: ${formatMoney(rentalFee, true)}` : "",
-        `🔒 Deposit: ${formatMoney(rate.deposit, true)} (refundable on return day)`,
-        months ? `✅ Total before delivery: ${formatMoney(total, true)}` : "",
-        "",
-        "Please send the start date and Google Maps link so admin can check the queue and delivery fee.",
-        months ? "" : "If you already know how many months, please tell me and I can calculate the total.",
-      ]
-        .filter(Boolean)
-        .join("\n")
-    : [
-        shouldGreetToday ? "สวัสดีครับ 🎮✨" : "",
-        `${deviceName} มีเรทรายเดือนครับ 😊🎮`,
-        "",
-        `📆 รายเดือน: ${formatMoney(rate.monthly)} / 1 เดือน`,
-        months ? `🗓️ ระยะเวลา: ${monthLabel} เดือน` : "",
-        months ? `💰 ค่าเช่า: ${formatMoney(rentalFee)}` : "",
-        `🔒 ค่าประกัน: ${formatMoney(rate.deposit)} ได้คืนวันคืนเครื่อง`,
-        months ? `✅ รวมสุทธิ: ${formatMoney(total)}` : "",
-        "",
-        "แจ้งวันที่เริ่มเช่าและลิงก์ Google Maps ได้เลยครับ เดี๋ยวช่วยเช็คคิวและค่าส่งให้ครับ 📍",
-        months ? "" : "ถ้าทราบจำนวนเดือนแล้ว แจ้งมาได้เลยครับ เดี๋ยวคำนวณยอดรวมให้ครับ ✅",
-      ]
-        .filter(Boolean)
-        .join("\n");
+  const keepLT = (arr) => arr.filter((x) => x !== undefined && x !== null && x !== false && x !== "").join("\n");
+
+  if (english) {
+    const groups = [];
+    if (shouldGreetToday) groups.push("Hello 🎮✨");
+    groups.push(`${deviceName} monthly rental is available 😊🎮`);
+    groups.push(keepLT([
+      `📆 Monthly rate: ${formatMoney(rate.monthly, true)} / month`,
+      months ? `🗓️ Duration: ${months} months` : false,
+      months ? `💰 Rental fee: ${formatMoney(rentalFee, true)}` : false,
+      `🔒 Deposit: ${formatMoney(rate.deposit, true)} (refundable on return day)`,
+      months ? `✅ Total before delivery: ${formatMoney(total, true)}` : false,
+    ]));
+    groups.push(
+      months
+        ? "📍 Please send the start date and Google Maps link so admin can check the queue and delivery fee."
+        : "🙏 Let me know how many months and the start date, I'll calculate the total.",
+    );
+    return groups.join("\n\n");
+  }
+
+  const groups = [];
+  if (shouldGreetToday) groups.push("สวัสดีครับ 🎮✨");
+  groups.push(`${deviceName} มีเรทรายเดือนครับ 😊🎮`);
+  groups.push(keepLT([
+    `📆 รายเดือน: ${formatMoney(rate.monthly)} / 1 เดือน`,
+    months ? `🗓️ ระยะเวลา: ${monthLabel} เดือน` : false,
+    months ? `💰 ค่าเช่า: ${formatMoney(rentalFee)}` : false,
+    `🔒 ค่าประกัน: ${formatMoney(rate.deposit)} ได้คืนวันคืนเครื่อง`,
+    months ? `✅ รวมสุทธิ: ${formatMoney(total)}` : false,
+  ]));
+  groups.push(
+    months
+      ? "📍 แจ้งวันที่เริ่มเช่าและลิงก์ Google Maps ได้เลยครับ เดี๋ยวเช็คคิวและค่าส่งให้ครับ"
+      : "🙏 แจ้งจำนวนเดือนและวันเริ่มเช่าได้เลยครับ เดี๋ยวคำนวณยอดรวมให้ครับ",
+  );
+  return groups.join("\n\n");
 }
 
 function includesBusinessRentalQuestion(text) {
@@ -3381,7 +3390,22 @@ app.post("/dialogflow-webhook", async (req, res) => {
     }
 
     if (!businessAnswer) {
-      const longTermAnswer = buildLongTermRentalAnswer(customerText, memory, shouldGreetForNextBlock());
+      // Reset monthly preference if customer explicitly asks for short-term (daily/weekly)
+      if (/รายวัน|รายสัปดาห์|daily|weekly|per day|per week/.test(normalizeSearchText(customerText))) {
+        memory.preferMonthly = false;
+      }
+      // Route summary requests back to monthly when the conversation is in a monthly context
+      const monthlyContextSummary =
+        memory.preferMonthly &&
+        !includesLongTermRentalQuestion(customerText) &&
+        includesSummaryRequest(customerText) &&
+        !extractRentalDays(customerText);
+      const longTermAnswer = buildLongTermRentalAnswer(
+        customerText,
+        memory,
+        shouldGreetForNextBlock(),
+        monthlyContextSummary,
+      );
       if (longTermAnswer) {
         answerBlocks.push(longTermAnswer);
       }
