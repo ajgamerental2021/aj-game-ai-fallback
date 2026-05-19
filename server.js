@@ -295,6 +295,12 @@ function getMemory(sessionKey) {
       preferMonthly: false,
       lastAnswerType: "",
       awaitingRecommendation: false,
+      phone: "",
+      mapsLink: "",
+      deviceCounts: {},
+      rentalCount: 0,
+      firstSeen: "",
+      lastSeen: "",
     });
   }
 
@@ -322,6 +328,12 @@ async function hydrateMemoryFromRedis(sessionKey) {
         preferMonthly: Boolean(data.preferMonthly),
         lastAnswerType: data.lastAnswerType || "",
         awaitingRecommendation: Boolean(data.awaitingRecommendation),
+        phone: data.phone || "",
+        mapsLink: data.mapsLink || "",
+        deviceCounts: data.deviceCounts && typeof data.deviceCounts === "object" ? data.deviceCounts : {},
+        rentalCount: data.rentalCount || 0,
+        firstSeen: data.firstSeen || "",
+        lastSeen: data.lastSeen || "",
       });
     }
   } catch (error) {
@@ -350,6 +362,19 @@ function extractDeviceName(text) {
   }
 
   return "";
+}
+
+function extractPhone(text) {
+  const value = String(text || "").replace(/[\s-]/g, "");
+  const match = value.match(/(?:^|[^\d])(0\d{8,9})(?:[^\d]|$)/);
+  return match ? match[1] : "";
+}
+
+function extractMapsLink(text) {
+  const match = String(text || "").match(
+    /https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.[a-z.]+|www\.google\.[a-z.]+\/maps|maps\.app\.google\.com|g\.co\/kgs)\/\S+/i,
+  );
+  return match ? match[0] : "";
 }
 
 function ambiguousTokenMatchesDevice(token, deviceName) {
@@ -3021,6 +3046,78 @@ app.get("/admin/stats", async (req, res) => {
   });
 });
 
+// Customer CRM profile — rental history, frequent device, contact, last asked.
+function buildCustomerProfile(sessionKey, mem) {
+  const deviceCounts = mem.deviceCounts || {};
+  const frequentDevice =
+    Object.entries(deviceCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  return {
+    sessionKey,
+    phone: mem.phone || "",
+    mapsLink: mem.mapsLink || "",
+    lastDevice: mem.lastDevice || "",
+    frequentDevice,
+    deviceCounts,
+    rentalCount: mem.rentalCount || 0,
+    lastGameQuery: mem.lastGameQuery || "",
+    lastRentalDays: mem.lastRentalDays ?? null,
+    lastStartDate: mem.lastStartDate || "",
+    firstSeen: mem.firstSeen || "",
+    lastSeen: mem.lastSeen || "",
+    recentMessages: Array.isArray(mem.lastMessages) ? mem.lastMessages : [],
+  };
+}
+
+app.get("/admin/customer", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const sessionKey = String(req.query.sessionKey || "").trim();
+  if (!sessionKey) {
+    return res.status(400).json({ ok: false, error: "sessionKey is required" });
+  }
+
+  let mem = conversationMemory.get(sessionKey);
+  if (!mem && redis) {
+    try {
+      const data = await redis.get(`mem:${sessionKey}`);
+      if (data && typeof data === "object") mem = data;
+    } catch (error) {
+      console.error("Customer lookup failed:", error);
+    }
+  }
+  if (!mem) return res.status(404).json({ ok: false, error: "Customer not found" });
+
+  res.json({ ok: true, customer: buildCustomerProfile(sessionKey, mem) });
+});
+
+app.get("/admin/customers", async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  if (!redis) {
+    return res.status(503).json({ ok: false, error: "Redis not configured" });
+  }
+
+  try {
+    let cursor = "0";
+    const customers = [];
+    do {
+      const [next, keys] = await redis.scan(cursor, { match: "mem:*", count: 100 });
+      cursor = next;
+      for (const k of keys || []) {
+        const sessionKey = k.replace("mem:", "");
+        const data = await redis.get(k);
+        if (data && typeof data === "object") {
+          customers.push(buildCustomerProfile(sessionKey, data));
+        }
+      }
+    } while (cursor !== "0");
+    customers.sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""));
+    res.json({ ok: true, count: customers.length, customers });
+  } catch (error) {
+    console.error("Customers list failed:", error);
+    res.status(500).json({ ok: false, error: "Customers list failed" });
+  }
+});
+
 app.get("/admin/pause-sheet", async (req, res) => {
   if (!requireAdmin(req, res)) return;
 
@@ -3427,6 +3524,27 @@ app.post("/dialogflow-webhook", async (req, res) => {
   if (detectedDevice) {
     memory.lastDevice = detectedDevice;
     bumpStat(`device:${detectedDevice}`);
+    memory.deviceCounts[detectedDevice] = (memory.deviceCounts[detectedDevice] || 0) + 1;
+  }
+
+  // Capture customer CRM details from the message.
+  const detectedPhone = extractPhone(customerText);
+  if (detectedPhone) memory.phone = detectedPhone;
+  const detectedMaps = extractMapsLink(customerText);
+  if (detectedMaps) memory.mapsLink = detectedMaps;
+  const nowIso = new Date().toISOString();
+  if (!memory.firstSeen) memory.firstSeen = nowIso;
+  memory.lastSeen = nowIso;
+
+  // Log every customer message to n8n (chat history / CRM).
+  if (customerText.trim()) {
+    notifyEvent("message", {
+      sessionKey,
+      customerText,
+      device: detectedDevice || memory.lastDevice || "",
+      phone: memory.phone || "",
+      mapsLink: memory.mapsLink || "",
+    });
   }
 
   const shouldGreetToday = memory.greetedDate !== today.dateKey;
@@ -3716,11 +3834,15 @@ app.post("/dialogflow-webhook", async (req, res) => {
           // Fire booking_summary whenever a full summary (with a start date) is produced.
           const issuedFullSummary = memory.summarySent && Boolean(extractStartDate(customerText) || memory.lastStartDate);
           if (issuedFullSummary && (!summarySentBefore || extractStartDate(customerText))) {
+            memory.rentalCount = (memory.rentalCount || 0) + 1;
             notifyEvent("booking_summary", {
               sessionKey,
               device: memory.lastDevice,
               days: memory.lastRentalDays,
               startDate: memory.lastStartDate,
+              phone: memory.phone || "",
+              mapsLink: memory.mapsLink || "",
+              rentalCount: memory.rentalCount,
             });
           }
         }
