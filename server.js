@@ -176,8 +176,8 @@ const deviceRates = new Map([
 const deviceAliases = [
   ["Lenovo Legion GO2", ["lenovo legion go2", "legion go2", "go2"]],
   ["ROG XBOX Ally X", ["rog xbox ally x", "rog ally x", "ally x", "rog"]],
-  ["Nintendo Switch 2", ["nintendo switch 2", "switch 2", "ns2", "n2"]],
-  ["Nintendo Switch 1", ["nintendo switch 1", "switch 1", "switch"]],
+  ["Nintendo Switch 2", ["nintendo switch 2", "switch 2", "switch2", "ns2", "n2"]],
+  ["Nintendo Switch 1", ["nintendo switch 1", "switch 1", "switch1", "switch"]],
   ["Steam Deck OLED", ["steam deck oled", "steam deck", "steam"]],
   ["Xbox Series X", ["xbox series x", "series x", "xbox x", "xbox sx", "xsx"]],
   ["Xbox Series S", ["xbox series s", "series s", "xbox s", "xbox ss", "xss"]],
@@ -362,8 +362,9 @@ function extractDeviceName(text) {
     if (
       aliases.some((alias) => {
         const a = alias.toLowerCase();
-        // Short alphanumeric aliases (n2, ns2, go2, mq3, ...) need a word boundary.
-        if (/^[a-z0-9]{1,3}$/.test(a)) {
+        // Short alphanumeric aliases (n2, ns2, go2, mq3, mq3s, xbox, ...) need a word
+        // boundary so random characters in URLs/IDs can't false-match a device.
+        if (/^[a-z0-9]{1,4}$/.test(a)) {
           return new RegExp(`(^|[^a-z0-9])${a}([^a-z0-9]|$)`, "i").test(normalized);
         }
         return normalized.includes(a);
@@ -823,15 +824,8 @@ async function buildNoContractReissueAnswer(customerText, memory, shouldGreetTod
       `🔒 Deposit: ${formatMoney(calc.deposit, true)} (refundable on return day)`,
       `✅ Total: ${formatMoney(calc.total, true)}`,
     ].join("\n"));
-    groups.push(
-      [
-        "📝 Booking payment: 200 THB",
-        `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
-        memory.mapsLink ? `📍 Google Maps delivery address (for delivery fee check): ${memory.mapsLink}` : false,
-      ]
-        .filter(lineKeep)
-        .join("\n"),
-    );
+    groups.push(["📝 Booking payment: 200 THB", `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`].join("\n"));
+    if (memory.mapsLink) groups.push(`📍 Google Maps delivery address (for delivery fee check): ${memory.mapsLink}`);
     if (returnDate) groups.push(`📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`);
     if (returnDate) groups.push(gamesLines.join("\n"));
     groups.push(buildEnglishPaymentLines(calc, true));
@@ -847,15 +841,8 @@ async function buildNoContractReissueAnswer(customerText, memory, shouldGreetTod
     `🔒 ค่าประกัน: ${formatMoney(calc.deposit)} ได้คืนวันคืนเครื่อง`,
     `✅ รวมสุทธิ: ${formatMoney(calc.total)}`,
   ].join("\n"));
-  groups.push(
-    [
-      "📝 โอนจองคิว: 200 บาท",
-      `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`,
-      memory.mapsLink ? `📍 Google Maps ที่อยู่จัดส่งสำหรับเช็คค่าจัดส่ง: ${memory.mapsLink}` : false,
-    ]
-      .filter(lineKeep)
-      .join("\n"),
-  );
+  groups.push(["📝 โอนจองคิว: 200 บาท", `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`].join("\n"));
+  if (memory.mapsLink) groups.push(`📍 Google Maps ที่อยู่จัดส่งสำหรับเช็คค่าจัดส่ง: ${memory.mapsLink}`);
   if (returnDate) groups.push(`📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}`);
   if (returnDate) groups.push(gamesLines.join("\n"));
   groups.push(buildThaiPaymentLines(calc, true));
@@ -1733,9 +1720,9 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
     const pay = [
       "📝 Booking payment: 200 THB",
       `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
-      memory.mapsLink ? `📍 Google Maps delivery address (for delivery fee check): ${memory.mapsLink}` : false,
     ];
     groups.push(keep(pay));
+    if (memory.mapsLink) groups.push(`📍 Google Maps delivery address (for delivery fee check): ${memory.mapsLink}`);
     if (returnDate) groups.push(`📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`);
     if (returnDate) groups.push(keep(gamesInfoLines));
     if (monthly) groups.push("ℹ️ Short-term rentals are usually daily/weekly, monthly available at this rate.");
@@ -1758,9 +1745,9 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   const pay = [
     "📝 โอนจองคิว: 200 บาท",
     `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`,
-    memory.mapsLink ? `📍 Google Maps ที่อยู่จัดส่งสำหรับเช็คค่าจัดส่ง: ${memory.mapsLink}` : false,
   ];
   groups.push(keep(pay));
+  if (memory.mapsLink) groups.push(`📍 Google Maps ที่อยู่จัดส่งสำหรับเช็คค่าจัดส่ง: ${memory.mapsLink}`);
   if (returnDate) groups.push(`📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}`);
   if (returnDate) groups.push(keep(gamesInfoLines));
   if (monthly) groups.push("ℹ️ ปกติเช่าระยะสั้นรายวัน/รายสัปดาห์ แต่มีเรทรายเดือนตามนี้ครับ");
