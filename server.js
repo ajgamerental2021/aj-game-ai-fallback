@@ -701,6 +701,15 @@ function parseExplicitDate(text, fallbackYear) {
 
 async function buildPendingNextDateAnswer(customerText, memory, shouldGreetToday) {
   if (!memory.pendingNextDate) return "";
+  // A no-contract confirmation is in progress — that affirmative belongs to the no-contract flow.
+  if (memory.noContractPending) return "";
+  // The pending suggestion is stale if the customer has moved to a different device.
+  const deviceInText = extractDeviceName(customerText);
+  if (deviceInText && memory.pendingDevice && deviceInText !== memory.pendingDevice) {
+    memory.pendingNextDate = "";
+    memory.pendingDevice = "";
+    return "";
+  }
   const english = isEnglishText(customerText);
   const value = normalizeSearchText(customerText);
 
@@ -1658,6 +1667,9 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   }
   if (includePayment) {
     memory.summarySent = true;
+    // A full summary supersedes any earlier queue-full "next date" suggestion.
+    memory.pendingNextDate = "";
+    memory.pendingDevice = "";
   }
 
   const keep = (arr) => arr.filter((x) => x !== undefined && x !== null && x !== false).join("\n").replace(/\n{3,}/g, "\n\n").trim();
