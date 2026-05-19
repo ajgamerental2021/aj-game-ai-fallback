@@ -353,10 +353,22 @@ async function persistMemoryToRedis(sessionKey) {
 }
 
 function extractDeviceName(text) {
-  const normalized = String(text || "").toLowerCase();
+  // Strip URLs first — random URL chars (e.g. "...QN2DZX9") collide with short aliases like "n2".
+  const normalized = String(text || "")
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, " ");
 
   for (const [deviceName, aliases] of deviceAliases) {
-    if (aliases.some((alias) => normalized.includes(alias.toLowerCase()))) {
+    if (
+      aliases.some((alias) => {
+        const a = alias.toLowerCase();
+        // Short alphanumeric aliases (n2, ns2, go2, mq3, ...) need a word boundary.
+        if (/^[a-z0-9]{1,3}$/.test(a)) {
+          return new RegExp(`(^|[^a-z0-9])${a}([^a-z0-9]|$)`, "i").test(normalized);
+        }
+        return normalized.includes(a);
+      })
+    ) {
       return deviceName;
     }
   }
@@ -811,7 +823,15 @@ async function buildNoContractReissueAnswer(customerText, memory, shouldGreetTod
       `🔒 Deposit: ${formatMoney(calc.deposit, true)} (refundable on return day)`,
       `✅ Total: ${formatMoney(calc.total, true)}`,
     ].join("\n"));
-    groups.push(["📝 Booking payment: 200 THB", `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`].join("\n"));
+    groups.push(
+      [
+        "📝 Booking payment: 200 THB",
+        `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
+        memory.mapsLink ? `📍 Google Maps delivery address (for delivery fee check): ${memory.mapsLink}` : false,
+      ]
+        .filter(lineKeep)
+        .join("\n"),
+    );
     if (returnDate) groups.push(`📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`);
     if (returnDate) groups.push(gamesLines.join("\n"));
     groups.push(buildEnglishPaymentLines(calc, true));
@@ -827,7 +847,15 @@ async function buildNoContractReissueAnswer(customerText, memory, shouldGreetTod
     `🔒 ค่าประกัน: ${formatMoney(calc.deposit)} ได้คืนวันคืนเครื่อง`,
     `✅ รวมสุทธิ: ${formatMoney(calc.total)}`,
   ].join("\n"));
-  groups.push(["📝 โอนจองคิว: 200 บาท", `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`].join("\n"));
+  groups.push(
+    [
+      "📝 โอนจองคิว: 200 บาท",
+      `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`,
+      memory.mapsLink ? `📍 Google Maps ที่อยู่จัดส่งสำหรับเช็คค่าจัดส่ง: ${memory.mapsLink}` : false,
+    ]
+      .filter(lineKeep)
+      .join("\n"),
+  );
   if (returnDate) groups.push(`📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}`);
   if (returnDate) groups.push(gamesLines.join("\n"));
   groups.push(buildThaiPaymentLines(calc, true));
@@ -1220,7 +1248,7 @@ function buildRecommendationReply(customerText, memory, shouldGreetToday) {
 
 function includesGeneralRentalQuestion(text) {
   const value = normalizeSearchText(text);
-  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธี[ก-๙ ]{0,6}(เช่า|จอง)|ขั้นตอน[ก-๙ ]{0,6}(เช่า|จอง)|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|มีเครื่องอะไรให้เช่า|เครื่องอะไรให้เช่า|เช่ามีอะไร|อยากเช่ามีอะไร|มีอะไรบ้าง|มีอะไรให้เลือก|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า|อยากเช่าเครื่องเกม|อยากเช่าเครื่อง|สนใจเช่าเครื่อง|อยากได้เครื่องเกม|เช่าเครื่องเกม|want to rent (a |an )?(game|console)|looking to rent/.test(
+  return /เช่ายังไง|เช่าไง|เช่าอย่างไร|เช่าทำยังไง|วิธี[ก-๙ ]{0,6}(เช่า|จอง)|ขั้นตอน[ก-๙ ]{0,6}(เช่า|จอง)|how to rent|how do i rent|how does (the )?rental work|มีเครื่องอะไร|เครื่องอะไรบ้าง|มีอะไรให้เช่า|มีรุ่นอะไร|มีเครื่องไหนบ้าง|มีรุ่นไหน|รุ่นไหนให้เช่า|มีเครื่องอะไรให้เช่า|เครื่องอะไรให้เช่า|เช่ามีอะไร|อยากเช่ามีอะไร|มีอะไรบ้าง|มีอะไรให้เลือก|what (consoles?|devices?) (do you have|are available)|เช่าแล้วได้อะไร|ได้อะไรบ้าง|what do i get|รายละเอียดการเช่า|อยากเช่าเครื่องเกม|อยากเช่าเครื่อง|สนใจเช่าเครื่อง|อยากได้เครื่องเกม|เช่าเครื่องเกม|want to rent (a |an )?(game|console)|looking to rent/.test(
     value,
   );
 }
@@ -1705,6 +1733,7 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
     const pay = [
       "📝 Booking payment: 200 THB",
       `🚚 Pay on delivery: ${formatMoney(calc.payOnDelivery, true)}`,
+      memory.mapsLink ? `📍 Google Maps delivery address (for delivery fee check): ${memory.mapsLink}` : false,
     ];
     groups.push(keep(pay));
     if (returnDate) groups.push(`📅 Rental period: ${formatDate(startDate, true)} - ${formatDate(returnDate, true)}`);
@@ -1729,6 +1758,7 @@ async function buildPriceAnswer(customerText, memory, shouldGreetToday) {
   const pay = [
     "📝 โอนจองคิว: 200 บาท",
     `🚚 จ่ายตอนรับเครื่อง: ${formatMoney(calc.payOnDelivery)}`,
+    memory.mapsLink ? `📍 Google Maps ที่อยู่จัดส่งสำหรับเช็คค่าจัดส่ง: ${memory.mapsLink}` : false,
   ];
   groups.push(keep(pay));
   if (returnDate) groups.push(`📅 รอบเช่า: ${formatDate(startDate)} - ${formatDate(returnDate)}`);
